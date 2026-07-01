@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-ink antialiased;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Scrollbar sutil */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-200 rounded-full;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-300;
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl border border-zinc-200/70 shadow-card;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover shadow-soft;
+  }
+  .btn-ghost {
+    @apply btn text-ink-soft hover:bg-zinc-100;
+  }
+  .btn-outline {
+    @apply btn border border-zinc-200 bg-white text-ink-soft hover:bg-zinc-50;
+  }
+  .input {
+    @apply w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-ink placeholder:text-zinc-400 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 transition;
+  }
+  .label {
+    @apply block text-xs font-medium text-ink-muted mb-1.5;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset;
+  }
+}
