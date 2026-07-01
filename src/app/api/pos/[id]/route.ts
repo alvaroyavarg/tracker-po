@@ -18,19 +18,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!existing) return NextResponse.json({ error: "No encontrada" }, { status: 404 });
 
   const patch: any = {};
+  const text = (k: string) => { if (body[k] !== undefined) patch[k] = coerceText(body[k]); };
+  const num = (k: string) => { if (body[k] !== undefined) patch[k] = coerceNumber(body[k]); };
+  const date = (k: string) => { if (body[k] !== undefined) patch[k] = coerceDate(body[k]); };
+
   if (body.poNumber !== undefined) patch.poNumber = String(body.poNumber).trim();
-  if (body.io !== undefined) patch.io = coerceText(body.io);
-  if (body.brand !== undefined) patch.brand = coerceText(body.brand);
-  if (body.vendor !== undefined) patch.vendor = coerceText(body.vendor);
-  if (body.description !== undefined) patch.description = coerceText(body.description);
-  if (body.category !== undefined) patch.category = coerceText(body.category);
-  if (body.amount !== undefined) patch.amount = coerceNumber(body.amount);
+  text("poLine"); text("io"); text("vendor"); text("description");
+  text("glAccount"); text("glDescription"); text("requisitioner"); text("owner");
+  text("reportingFY"); text("notes");
+  num("totalPoValue"); num("lineValue"); num("invoicedAmount"); num("openAmount");
+  date("poDate"); date("deliveryDate"); date("executionDate");
   if (body.currency !== undefined) patch.currency = coerceText(body.currency) || "CLP";
   if (body.status !== undefined) patch.status = coerceText(body.status) || existing.status;
-  if (body.poDate !== undefined) patch.poDate = coerceDate(body.poDate);
-  if (body.deliveryDate !== undefined) patch.deliveryDate = coerceDate(body.deliveryDate);
-  if (body.executionDate !== undefined) patch.executionDate = coerceDate(body.executionDate);
-  if (body.notes !== undefined) patch.notes = coerceText(body.notes);
 
   const statusChanged = patch.status && patch.status !== existing.status;
   const po = updatePo(params.id, patch);

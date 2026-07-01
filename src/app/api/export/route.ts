@@ -6,7 +6,7 @@ import { formatDate } from "@/lib/format";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/export?format=xlsx|csv&q=&status=&io=&vendor=&brand=
+// GET /api/export?format=xlsx|csv&q=&status=&io=&vendor=
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const format = sp.get("format") === "csv" ? "csv" : "xlsx";
@@ -16,22 +16,28 @@ export async function GET(req: NextRequest) {
     status: sp.get("status")?.trim() || undefined,
     io: sp.get("io")?.trim() || undefined,
     vendor: sp.get("vendor")?.trim() || undefined,
-    brand: sp.get("brand")?.trim() || undefined,
   });
 
   const rows = pos.map((p) => ({
     "N° PO": p.poNumber,
+    Línea: p.poLine || "",
     IO: p.io || "",
-    Marca: p.brand || "",
     Proveedor: p.vendor || "",
     Descripción: p.description || "",
-    Categoría: p.category || "",
-    Monto: p.amount,
+    "Cuenta G/L": p.glAccount || "",
+    "Descripción G/L": p.glDescription || "",
+    "Valor total PO": p.totalPoValue,
+    "Valor línea": p.lineValue,
+    Facturado: p.invoicedAmount,
+    "Saldo abierto": p.openAmount,
     Moneda: p.currency,
     Estado: p.status,
-    "Fecha emisión": p.poDate ? formatDate(p.poDate) : "",
+    "Fecha creación": p.poDate ? formatDate(p.poDate) : "",
     "Fecha entrega": p.deliveryDate ? formatDate(p.deliveryDate) : "",
     "Mes ejecución": p.executionDate ? formatDate(p.executionDate) : "",
+    Requisitioner: p.requisitioner || "",
+    Responsable: p.owner || "",
+    FY: p.reportingFY || "",
     Notas: p.notes || "",
   }));
 

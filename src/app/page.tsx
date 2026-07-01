@@ -9,20 +9,27 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   Cell,
   PieChart,
   Pie,
 } from "recharts";
-import { TrendingUp, Wallet, ListChecks, Building2, Upload } from "lucide-react";
+import { TrendingUp, Wallet, ListChecks, CircleDollarSign, Upload } from "lucide-react";
 import { PageHeader, EmptyState, Spinner } from "@/components/ui";
 import { formatMoney, formatNumber, monthLabel } from "@/lib/format";
-import { STATUS_COLORS } from "@/lib/types";
 
 interface DashboardData {
-  totals: { count: number; totalAmount: number; currency: string };
+  totals: {
+    lineCount: number;
+    poCount: number;
+    committed: number;
+    invoiced: number;
+    open: number;
+    currency: string;
+  };
   byStatus: { status: string; count: number; amount: number }[];
   byVendor: { vendor: string; count: number; amount: number }[];
-  byIO: { io: string; count: number; amount: number }[];
+  byIO: { io: string; count: number; committed: number; invoiced: number; open: number }[];
   forecast: {
     months: string[];
     ios: string[];
@@ -52,8 +59,12 @@ export default function DashboardPage() {
     );
   }
 
-  const empty = !data || data.totals.count === 0;
+  const empty = !data || data.totals.lineCount === 0;
   const currency = data?.totals.currency || "CLP";
+  const pctExec =
+    data && data.totals.committed > 0
+      ? (data.totals.invoiced / data.totals.committed) * 100
+      : 0;
 
   return (
     <div className="p-8 max-w-[1200px] mx-auto">
@@ -66,7 +77,7 @@ export default function DashboardPage() {
         <EmptyState
           icon={<Upload className="h-10 w-10" />}
           title="Aún no hay Purchase Orders"
-          hint="Carga tu sábana en Excel o CSV para empezar a ver totales, estados y el forecast por IO."
+          hint="Carga tu sábana en Excel o CSV para empezar a ver totales, ejecución y el forecast por IO."
           action={
             <Link href="/import" className="btn-primary">
               <Upload className="h-4 w-4" /> Cargar sábana
@@ -79,36 +90,49 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard
               icon={<ListChecks className="h-5 w-5" />}
-              label="Total PO"
-              value={formatNumber(data!.totals.count)}
+              label="PO / líneas"
+              value={`${formatNumber(data!.totals.poCount)} / ${formatNumber(data!.totals.lineCount)}`}
             />
             <StatCard
               icon={<Wallet className="h-5 w-5" />}
-              label="Monto total"
-              value={formatMoney(data!.totals.totalAmount, currency)}
+              label="Comprometido"
+              value={formatMoney(data!.totals.committed, currency)}
             />
             <StatCard
-              icon={<Building2 className="h-5 w-5" />}
-              label="IOs activos"
-              value={formatNumber(data!.byIO.filter((i) => i.io !== "Sin IO").length)}
+              icon={<CircleDollarSign className="h-5 w-5" />}
+              label="Facturado"
+              value={formatMoney(data!.totals.invoiced, currency)}
+              sub={`${pctExec.toFixed(1)}% de ejecución`}
+              tone="emerald"
             />
             <StatCard
               icon={<TrendingUp className="h-5 w-5" />}
-              label="Meses en forecast"
-              value={formatNumber(data!.forecast.months.length)}
+              label="Saldo abierto"
+              value={formatMoney(data!.totals.open, currency)}
+              tone="amber"
             />
           </div>
 
           {/* Charts */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="card p-5 lg:col-span-2">
-              <h3 className="text-sm font-semibold text-ink mb-4">Monto por IO</h3>
+              <h3 className="text-sm font-semibold text-ink mb-4">
+                Ejecución por IO <span className="font-normal text-ink-muted">(facturado vs abierto)</span>
+              </h3>
               {data!.byIO.length === 0 ? (
                 <p className="text-sm text-ink-muted">Sin datos.</p>
               ) : (
-                <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={data!.byIO.slice(0, 10)} margin={{ left: 10, right: 10 }}>
-                    <XAxis dataKey="io" tick={{ fontSize: 11 }} stroke="#a1a1aa" />
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={data!.byIO.slice(0, 12)} margin={{ left: 10, right: 10 }}>
+                    <XAxis
+                      dataKey="io"
+                      tick={{ fontSize: 10 }}
+                      stroke="#a1a1aa"
+                      angle={-35}
+                      textAnchor="end"
+                      height={70}
+                      interval={0}
+                    />
                     <YAxis
                       tick={{ fontSize: 11 }}
                       stroke="#a1a1aa"
@@ -116,17 +140,25 @@ export default function DashboardPage() {
                       width={70}
                     />
                     <Tooltip
-                      formatter={(v: number) => formatMoney(v, currency)}
+                      formatter={(v: number, name: string) => [
+                        formatMoney(v, currency),
+                        name === "invoiced" ? "Facturado" : "Abierto",
+                      ]}
                       contentStyle={tooltipStyle}
                     />
-                    <Bar dataKey="amount" radius={[6, 6, 0, 0]} fill="#4f46e5" />
+                    <Legend
+                      formatter={(v) => (v === "invoiced" ? "Facturado" : "Abierto")}
+                      wrapperStyle={{ fontSize: 12 }}
+                    />
+                    <Bar dataKey="invoiced" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="open" stackId="a" fill="#f59e0b" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
             </div>
 
             <div className="card p-5">
-              <h3 className="text-sm font-semibold text-ink mb-4">PO por estado</h3>
+              <h3 className="text-sm font-semibold text-ink mb-4">Líneas por estado</h3>
               {data!.byStatus.length === 0 ? (
                 <p className="text-sm text-ink-muted">Sin datos.</p>
               ) : (
@@ -172,19 +204,19 @@ export default function DashboardPage() {
 
           {/* Top proveedores */}
           <div className="card p-5">
-            <h3 className="text-sm font-semibold text-ink mb-4">Top proveedores por monto</h3>
+            <h3 className="text-sm font-semibold text-ink mb-4">Top proveedores por monto comprometido</h3>
             <div className="flex flex-col gap-2">
               {data!.byVendor.map((v) => {
                 const max = data!.byVendor[0]?.amount || 1;
                 const pct = Math.max(4, (v.amount / max) * 100);
                 return (
                   <div key={v.vendor} className="flex items-center gap-3">
-                    <span className="w-40 truncate text-sm text-ink-soft" title={v.vendor}>
+                    <span className="w-44 truncate text-sm text-ink-soft" title={v.vendor}>
                       {v.vendor}
                     </span>
                     <div className="flex-1 h-6 rounded-lg bg-zinc-100 overflow-hidden">
                       <div
-                        className="h-full rounded-lg bg-accent/80 flex items-center justify-end pr-2"
+                        className="h-full rounded-lg bg-accent/80"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
@@ -202,16 +234,32 @@ export default function DashboardPage() {
   );
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function StatCard({
+  icon,
+  label,
+  value,
+  sub,
+  tone = "indigo",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "indigo" | "emerald" | "amber";
+}) {
+  const tones: Record<string, string> = {
+    indigo: "bg-accent-soft text-accent",
+    emerald: "bg-emerald-50 text-emerald-600",
+    amber: "bg-amber-50 text-amber-600",
+  };
   return (
     <div className="card p-5">
       <div className="flex items-center gap-2 text-ink-muted mb-3">
-        <span className="grid place-items-center h-8 w-8 rounded-lg bg-accent-soft text-accent">
-          {icon}
-        </span>
+        <span className={`grid place-items-center h-8 w-8 rounded-lg ${tones[tone]}`}>{icon}</span>
         <span className="text-xs font-medium">{label}</span>
       </div>
-      <div className="text-2xl font-semibold tracking-tight text-ink">{value}</div>
+      <div className="text-xl font-semibold tracking-tight text-ink">{value}</div>
+      {sub && <div className="text-xs text-ink-muted mt-1">{sub}</div>}
     </div>
   );
 }
@@ -228,8 +276,7 @@ function ForecastTable({
       <div className="card p-5">
         <h3 className="text-sm font-semibold text-ink mb-2">Forecast de ejecución mensual por IO</h3>
         <p className="text-sm text-ink-muted">
-          Asigna un <span className="font-medium">Mes de ejecución</span> (o fecha de emisión) a tus
-          PO para ver la proyección mensual acá.
+          No hay saldos abiertos con fecha (ejecución, entrega o creación) para proyectar.
         </p>
       </div>
     );
@@ -239,13 +286,14 @@ function ForecastTable({
     <div className="card p-5 overflow-hidden">
       <h3 className="text-sm font-semibold text-ink mb-1">Forecast de ejecución mensual por IO</h3>
       <p className="text-xs text-ink-muted mb-4">
-        Proyección de ejecución agrupada por Internal Order y mes.
+        Saldo abierto proyectado al mes de ejecución de cada línea (usa fecha de ejecución; si no
+        existe, la de entrega o creación).
       </p>
       <div className="overflow-x-auto -mx-5 px-5">
         <table className="w-full text-sm border-separate border-spacing-0">
           <thead>
             <tr>
-              <th className="sticky left-0 bg-white text-left font-medium text-ink-muted pb-2 pr-4 min-w-[120px]">
+              <th className="sticky left-0 bg-white text-left font-medium text-ink-muted pb-2 pr-4 min-w-[130px]">
                 IO
               </th>
               {forecast.months.map((m) => (
@@ -262,7 +310,7 @@ function ForecastTable({
               const total = forecast.months.reduce((s, m) => s + (row[m] || 0), 0);
               return (
                 <tr key={io} className="group">
-                  <td className="sticky left-0 bg-white group-hover:bg-zinc-50 border-t border-zinc-100 py-2 pr-4 font-medium text-ink">
+                  <td className="sticky left-0 bg-white group-hover:bg-zinc-50 border-t border-zinc-100 py-2 pr-4 font-medium text-ink whitespace-nowrap">
                     {io}
                   </td>
                   {forecast.months.map((m) => (
@@ -279,7 +327,6 @@ function ForecastTable({
                 </tr>
               );
             })}
-            {/* Fila de totales */}
             <tr>
               <td className="sticky left-0 bg-zinc-50 border-t-2 border-zinc-200 py-2 pr-4 font-semibold text-ink">
                 Total mes
@@ -313,7 +360,7 @@ const tooltipStyle = {
   boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
 };
 
-// Formato compacto para celdas densas (ej: $1,2 M).
+// Formato compacto para celdas densas (ej: $1,2M).
 function compact(v: number, currency: string): string {
   const abs = Math.abs(v);
   const sym = currency === "USD" ? "US$" : currency === "CLP" ? "$" : "";

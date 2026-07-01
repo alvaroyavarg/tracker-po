@@ -8,6 +8,7 @@ import path from "node:path";
 
 const DB_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DB_DIR, "tracker.db");
+const SCHEMA_VERSION = 2;
 
 const globalForDb = globalThis as unknown as { _db?: DatabaseSync };
 
@@ -15,29 +16,51 @@ function init(): DatabaseSync {
   if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
   const db = new DatabaseSync(DB_PATH);
   db.exec("PRAGMA journal_mode = WAL;");
+
+  // Si el esquema cambió de versión, se recrea (los datos se recargan desde la sábana).
+  const row = db.prepare("PRAGMA user_version").get() as any;
+  const version = Number(row?.user_version ?? 0);
+  if (version !== SCHEMA_VERSION) {
+    db.exec(`
+      DROP TABLE IF EXISTS purchase_orders;
+      DROP TABLE IF EXISTS po_lines;
+      DROP TABLE IF EXISTS status_changes;
+      DROP TABLE IF EXISTS snapshots;
+    `);
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+  }
+
   db.exec(`
-    CREATE TABLE IF NOT EXISTS purchase_orders (
-      id            TEXT PRIMARY KEY,
-      poNumber      TEXT NOT NULL,
-      io            TEXT,
-      brand         TEXT,
-      vendor        TEXT,
-      description   TEXT,
-      category      TEXT,
-      amount        REAL NOT NULL DEFAULT 0,
-      currency      TEXT NOT NULL DEFAULT 'CLP',
-      status        TEXT NOT NULL DEFAULT 'Pendiente',
-      poDate        TEXT,
-      deliveryDate  TEXT,
-      executionDate TEXT,
-      notes         TEXT,
-      raw           TEXT,
-      createdAt     TEXT NOT NULL,
-      updatedAt     TEXT NOT NULL
+    CREATE TABLE IF NOT EXISTS po_lines (
+      id             TEXT PRIMARY KEY,
+      poNumber       TEXT NOT NULL,
+      poLine         TEXT,
+      io             TEXT,
+      vendor         TEXT,
+      description    TEXT,
+      glAccount      TEXT,
+      glDescription  TEXT,
+      requisitioner  TEXT,
+      owner          TEXT,
+      reportingFY    TEXT,
+      totalPoValue   REAL NOT NULL DEFAULT 0,
+      lineValue      REAL NOT NULL DEFAULT 0,
+      invoicedAmount REAL NOT NULL DEFAULT 0,
+      openAmount     REAL NOT NULL DEFAULT 0,
+      currency       TEXT NOT NULL DEFAULT 'CLP',
+      status         TEXT NOT NULL DEFAULT 'Pendiente',
+      poDate         TEXT,
+      deliveryDate   TEXT,
+      executionDate  TEXT,
+      notes          TEXT,
+      raw            TEXT,
+      createdAt      TEXT NOT NULL,
+      updatedAt      TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_po_io ON purchase_orders(io);
-    CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
-    CREATE INDEX IF NOT EXISTS idx_po_vendor ON purchase_orders(vendor);
+    CREATE INDEX IF NOT EXISTS idx_line_po ON po_lines(poNumber);
+    CREATE INDEX IF NOT EXISTS idx_line_io ON po_lines(io);
+    CREATE INDEX IF NOT EXISTS idx_line_status ON po_lines(status);
+    CREATE INDEX IF NOT EXISTS idx_line_vendor ON po_lines(vendor);
 
     CREATE TABLE IF NOT EXISTS status_changes (
       id         TEXT PRIMARY KEY,

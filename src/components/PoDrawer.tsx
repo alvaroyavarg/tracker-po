@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { X, Trash2, Save } from "lucide-react";
-import { PO_STATUSES, PurchaseOrderDTO } from "@/lib/types";
-import { formatDate } from "@/lib/format";
+import { PO_STATUSES, PoLineDTO } from "@/lib/types";
+import { formatDate, formatMoney } from "@/lib/format";
 
 interface Props {
-  po: PurchaseOrderDTO | null; // null => nueva PO
+  po: PoLineDTO | null; // null => nueva línea
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
@@ -14,12 +14,16 @@ interface Props {
 
 const emptyForm = {
   poNumber: "",
+  poLine: "",
   io: "",
-  brand: "",
   vendor: "",
   description: "",
-  category: "",
-  amount: "",
+  glAccount: "",
+  glDescription: "",
+  totalPoValue: "",
+  lineValue: "",
+  invoicedAmount: "",
+  openAmount: "",
   currency: "CLP",
   status: "Pendiente",
   poDate: "",
@@ -43,12 +47,16 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
     if (po) {
       setForm({
         poNumber: po.poNumber || "",
+        poLine: po.poLine || "",
         io: po.io || "",
-        brand: po.brand || "",
         vendor: po.vendor || "",
         description: po.description || "",
-        category: po.category || "",
-        amount: String(po.amount ?? ""),
+        glAccount: po.glAccount || "",
+        glDescription: po.glDescription || "",
+        totalPoValue: String(po.totalPoValue ?? ""),
+        lineValue: String(po.lineValue ?? ""),
+        invoicedAmount: String(po.invoicedAmount ?? ""),
+        openAmount: String(po.openAmount ?? ""),
         currency: po.currency || "CLP",
         status: po.status || "Pendiente",
         poDate: toInputDate(po.poDate),
@@ -98,7 +106,7 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
 
   async function remove() {
     if (!po) return;
-    if (!confirm(`¿Eliminar la PO ${po.poNumber}?`)) return;
+    if (!confirm(`¿Eliminar la línea ${po.poLine || ""} de la PO ${po.poNumber}?`)) return;
     await fetch(`/api/pos/${po.id}`, { method: "DELETE" });
     onSaved();
     onClose();
@@ -106,28 +114,53 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
 
   if (!open) return null;
 
+  const lineVal = parseFloat(form.lineValue) || 0;
+  const invoiced = parseFloat(form.invoicedAmount) || 0;
+  const pct = lineVal > 0 ? Math.min(100, (invoiced / lineVal) * 100) : 0;
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-ink/20 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative w-full max-w-md bg-white h-full shadow-lift flex flex-col animate-[slideIn_.2s_ease-out]">
         <style>{`@keyframes slideIn{from{transform:translateX(20px);opacity:.6}to{transform:translateX(0);opacity:1}}`}</style>
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200/70">
-          <h2 className="font-semibold text-ink">{isNew ? "Nueva PO" : `PO ${po!.poNumber}`}</h2>
+          <div>
+            <h2 className="font-semibold text-ink">
+              {isNew ? "Nueva línea de PO" : `PO ${po!.poNumber}${po!.poLine ? ` · línea ${po!.poLine}` : ""}`}
+            </h2>
+            {!isNew && po!.io && <p className="text-xs text-accent font-medium mt-0.5">{po!.io}</p>}
+          </div>
           <button onClick={onClose} className="btn-ghost p-2">
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-4">
+          {!isNew && (
+            <div className="rounded-xl bg-zinc-50 border border-zinc-200/70 p-3">
+              <div className="flex items-center justify-between text-xs text-ink-muted mb-1.5">
+                <span>Ejecución de la línea</span>
+                <span className="tabular-nums">{pct.toFixed(0)}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-zinc-200 overflow-hidden">
+                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+              </div>
+              <div className="flex justify-between text-[11px] text-ink-muted mt-1.5">
+                <span>Fact. {formatMoney(invoiced, form.currency)}</span>
+                <span>Abierto {formatMoney(parseFloat(form.openAmount) || 0, form.currency)}</span>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <Field label="N° PO *">
               <input className="input" value={form.poNumber} onChange={(e) => set("poNumber", e.target.value)} />
             </Field>
+            <Field label="N° línea">
+              <input className="input" value={form.poLine} onChange={(e) => set("poLine", e.target.value)} />
+            </Field>
             <Field label="IO">
               <input className="input" value={form.io} onChange={(e) => set("io", e.target.value)} />
-            </Field>
-            <Field label="Marca">
-              <input className="input" value={form.brand} onChange={(e) => set("brand", e.target.value)} />
             </Field>
             <Field label="Proveedor">
               <input className="input" value={form.vendor} onChange={(e) => set("vendor", e.target.value)} />
@@ -139,18 +172,36 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Categoría">
-              <input className="input" value={form.category} onChange={(e) => set("category", e.target.value)} />
+            <Field label="Cuenta G/L">
+              <input className="input" value={form.glAccount} onChange={(e) => set("glAccount", e.target.value)} />
             </Field>
+            <Field label="Descripción G/L">
+              <input className="input" value={form.glDescription} onChange={(e) => set("glDescription", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Valor total PO">
+              <input className="input" type="number" value={form.totalPoValue} onChange={(e) => set("totalPoValue", e.target.value)} />
+            </Field>
+            <Field label="Valor línea">
+              <input className="input" type="number" value={form.lineValue} onChange={(e) => set("lineValue", e.target.value)} />
+            </Field>
+            <Field label="Facturado">
+              <input className="input" type="number" value={form.invoicedAmount} onChange={(e) => set("invoicedAmount", e.target.value)} />
+            </Field>
+            <Field label="Saldo abierto">
+              <input className="input" type="number" value={form.openAmount} onChange={(e) => set("openAmount", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Estado">
               <select className="input" value={form.status} onChange={(e) => set("status", e.target.value)}>
                 {PO_STATUSES.map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
-            </Field>
-            <Field label="Monto">
-              <input className="input" type="number" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
             </Field>
             <Field label="Moneda">
               <select className="input" value={form.currency} onChange={(e) => set("currency", e.target.value)}>
@@ -162,7 +213,7 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Emisión">
+            <Field label="Creación">
               <input className="input" type="date" value={form.poDate} onChange={(e) => set("poDate", e.target.value)} />
             </Field>
             <Field label="Entrega">
@@ -183,7 +234,9 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
               <div className="flex flex-col gap-2">
                 {history.map((h) => (
                   <div key={h.id} className="text-xs text-ink-muted flex items-center gap-2">
-                    <span className="text-ink-soft">{h.fromStatus || "—"} → <span className="font-medium text-ink">{h.toStatus}</span></span>
+                    <span className="text-ink-soft">
+                      {h.fromStatus || "—"} → <span className="font-medium text-ink">{h.toStatus}</span>
+                    </span>
                     <span className="text-zinc-400">· {formatDate(h.createdAt)}</span>
                   </div>
                 ))}

@@ -14,20 +14,39 @@ export function normalizeHeader(h: string): string {
     .trim();
 }
 
-// Sinónimos por campo (en normalizado) para el auto-mapeo.
+// ¿El texto (owner/requisitioner) calza con el filtro de dueño?
+// Tolerante a puntos, mayúsculas, tildes y dominios de correo:
+// "Alvaro Yavar" calza con "Alvaro.Yavar@diageo.com".
+export function matchesOwner(value: string | null | undefined, filter: string): boolean {
+  if (!filter.trim()) return true;
+  const hay = normalizeHeader(String(value ?? ""));
+  if (!hay) return false;
+  const tokens = normalizeHeader(filter).split(" ").filter(Boolean);
+  return tokens.every((t) => hay.includes(t));
+}
+
+// Sinónimos por campo (normalizados) para el auto-mapeo.
+// Incluye los encabezados exactos de la sábana COUPA/SAP.
 const SYNONYMS: Record<PoFieldKey, string[]> = {
-  poNumber: ["po", "n po", "num po", "numero po", "purchase order", "orden de compra", "oc", "po number", "n orden", "pedido"],
-  io: ["io", "internal order", "orden interna", "centro de costo", "centro costo", "cost center", "cc", "ceco"],
-  brand: ["marca", "brand", "unidad de negocio", "bu"],
-  vendor: ["proveedor", "vendor", "supplier", "razon social", "nombre proveedor"],
-  description: ["descripcion", "description", "detalle", "glosa", "concepto", "item"],
-  category: ["categoria", "category", "familia", "tipo", "rubro"],
-  amount: ["monto", "amount", "valor", "total", "neto", "importe", "monto neto", "monto total", "precio"],
+  poNumber: ["po number", "po", "n po", "num po", "numero po", "purchase order", "orden de compra", "oc", "n orden", "pedido"],
+  poLine: ["po line number", "po line", "linea", "n linea", "line", "line number", "item po", "posicion"],
+  io: ["internal order", "io", "orden interna", "centro de costo", "centro costo", "cost center", "cc", "ceco"],
+  vendor: ["vendor name1", "vendor name", "proveedor", "vendor", "supplier", "razon social", "nombre proveedor"],
+  description: ["po descripcion", "po description", "descripcion", "description", "detalle", "glosa", "concepto"],
+  glAccount: ["g l account", "gl account", "cuenta gl", "cuenta contable", "cuenta"],
+  glDescription: ["g l description", "gl description", "descripcion gl", "descripcion cuenta"],
+  requisitioner: ["po requisitioner mail id", "requisitioner", "requisitioner mail", "solicitante mail", "mail solicitante"],
+  owner: ["owner", "buyer", "requestor", "requestor name", "responsable", "dueno", "solicitante", "comprador", "gestor", "brand manager", "requester", "requester name", "created by", "creado por"],
+  reportingFY: ["reporting fy", "fy", "fiscal year", "ano fiscal"],
+  totalPoValue: ["total po value", "valor total po", "monto total po", "po value"],
+  lineValue: ["total po line value", "po line value", "valor linea", "monto linea", "line value", "monto", "valor", "importe"],
+  invoicedAmount: ["as of today total invoice", "total invoice", "invoice", "facturado", "invoiced", "ejecutado", "gr amount", "receipted"],
+  openAmount: ["open po line value", "open po value", "open value", "saldo abierto", "saldo", "open amount", "pendiente", "por ejecutar", "restante"],
   currency: ["moneda", "currency", "divisa"],
-  status: ["estado", "status", "situacion", "etapa"],
-  poDate: ["fecha emision", "fecha po", "fecha oc", "fecha creacion", "po date", "fecha orden", "emision"],
-  deliveryDate: ["fecha entrega", "delivery date", "entrega", "fecha recepcion", "recepcion"],
-  executionDate: ["mes ejecucion", "fecha ejecucion", "mes de ejecucion", "ejecucion", "mes", "periodo", "fecha estimada", "forecast"],
+  status: ["estado", "status", "situacion", "etapa", "po status"],
+  poDate: ["po creation date coupa", "po creation date sap", "po creation date", "fecha creacion", "fecha emision", "fecha po", "fecha oc", "po date", "creation date"],
+  deliveryDate: ["delivery date", "fecha entrega", "entrega", "fecha recepcion", "recepcion"],
+  executionDate: ["mes ejecucion", "fecha ejecucion", "mes de ejecucion", "ejecucion", "periodo", "forecast"],
   notes: ["notas", "notes", "observacion", "observaciones", "comentario", "comentarios", "obs"],
 };
 
@@ -36,33 +55,33 @@ export function autoMap(headers: string[]): Record<string, PoFieldKey | ""> {
   const mapping: Record<string, PoFieldKey | ""> = {};
   const used = new Set<PoFieldKey>();
 
+  // 1) match exacto contra sinónimos
   for (const header of headers) {
     const norm = normalizeHeader(header);
     let best: PoFieldKey | "" = "";
-
-    // 1) match exacto contra sinónimos
     for (const field of PO_FIELDS) {
       if (used.has(field.key)) continue;
-      const syns = SYNONYMS[field.key];
-      if (syns.some((s) => s === norm)) {
+      if (SYNONYMS[field.key].some((s) => s === norm)) {
         best = field.key;
         break;
       }
     }
-    // 2) match parcial (contiene)
-    if (!best) {
-      for (const field of PO_FIELDS) {
-        if (used.has(field.key)) continue;
-        const syns = SYNONYMS[field.key];
-        if (syns.some((s) => norm.includes(s) || s.includes(norm))) {
-          best = field.key;
-          break;
-        }
-      }
-    }
-
     mapping[header] = best;
     if (best) used.add(best);
+  }
+  // 2) match parcial (contiene) para lo que quedó sin mapear
+  for (const header of headers) {
+    if (mapping[header]) continue;
+    const norm = normalizeHeader(header);
+    if (!norm) continue;
+    for (const field of PO_FIELDS) {
+      if (used.has(field.key)) continue;
+      if (SYNONYMS[field.key].some((s) => norm.includes(s) || s.includes(norm))) {
+        mapping[header] = field.key;
+        used.add(field.key);
+        break;
+      }
+    }
   }
   return mapping;
 }
@@ -81,14 +100,11 @@ export function coerceNumber(value: unknown): number {
   const hasDot = s.includes(".");
   if (hasComma && hasDot) {
     if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
-      // coma es decimal -> quita puntos, coma->punto
       s = s.replace(/\./g, "").replace(",", ".");
     } else {
-      // punto es decimal -> quita comas
       s = s.replace(/,/g, "");
     }
   } else if (hasComma) {
-    // solo coma: si hay 3 dígitos tras la última coma, es separador de miles
     const after = s.split(",").pop() || "";
     if (after.length === 3) s = s.replace(/,/g, "");
     else s = s.replace(",", ".");
@@ -131,7 +147,6 @@ export function coerceDate(value: unknown): Date | null {
   if (value == null || value === "") return null;
   if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
   if (typeof value === "number") {
-    // Serial de Excel (rango razonable)
     if (value > 20000 && value < 80000) return excelSerialToDate(value);
     return null;
   }
