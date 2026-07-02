@@ -1,7 +1,8 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import clsx from "clsx";
 import {
   LayoutDashboard,
@@ -13,15 +14,35 @@ import {
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/pos", label: "Purchase Orders", icon: Table2 },
+  { href: "/pos?fy=F26", label: "Purchase Orders F26", icon: Table2 },
+  { href: "/pos?fy=F27", label: "Purchase Orders F27", icon: Table2 },
   { href: "/import", label: "Cargar sábana", icon: Upload },
   { href: "/snapshots", label: "Respaldos", icon: History },
 ];
 
 export function Sidebar() {
+  return (
+    <Suspense fallback={null}>
+      <SidebarInner />
+    </Suspense>
+  );
+}
+
+function SidebarInner() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   if (pathname === "/login") return null;
+
+  function isActive(href: string): boolean {
+    const [path, query] = href.split("?");
+    if (path === "/") return pathname === "/";
+    if (!pathname.startsWith(path)) return false;
+    if (!query) return true;
+    // Distinguir F26 de F27 por el parámetro fy.
+    const fy = new URLSearchParams(query).get("fy");
+    return searchParams.get("fy") === fy;
+  }
 
   return (
     <aside className="w-64 shrink-0 border-r border-zinc-200/70 bg-white/60 backdrop-blur-sm px-4 py-6 flex flex-col gap-8 sticky top-0 h-screen">
@@ -37,10 +58,7 @@ export function Sidebar() {
 
       <nav className="flex flex-col gap-1">
         {NAV.map((item) => {
-          const active =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
+          const active = isActive(item.href);
           const Icon = item.icon;
           return (
             <Link
@@ -63,8 +81,8 @@ export function Sidebar() {
       <div className="mt-auto px-3">
         <div className="rounded-xl bg-zinc-50 border border-zinc-200/70 p-3">
           <p className="text-[11px] leading-relaxed text-ink-muted">
-            Carga tu sábana en Excel o CSV y administra tus PO con forecast
-            mensual por IO.
+            F26: creadas 01/07/2025 – 30/06/2026.<br />
+            F27: creadas 01/07/2026 – 30/06/2027.
           </p>
         </div>
       </div>

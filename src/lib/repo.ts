@@ -1,5 +1,6 @@
 import { PoolClient } from "pg";
 import { q, withTransaction, newId, nowIso } from "./db";
+import { fyBounds } from "./format";
 import type { PoLineDTO } from "./types";
 
 export interface PoInput {
@@ -84,6 +85,7 @@ export interface PoFilters {
   io?: string;
   vendor?: string;
   poNumber?: string;
+  fy?: string; // "F26" = creadas 01/07/2025 → 30/06/2026
 }
 
 export async function listPos(f: PoFilters = {}, run: Runner = poolRunner): Promise<PoLineDTO[]> {
@@ -94,6 +96,21 @@ export async function listPos(f: PoFilters = {}, run: Runner = poolRunner): Prom
   if (f.io) { args.push(f.io); clauses.push(`io = ${p()}`); }
   if (f.vendor) { args.push(f.vendor); clauses.push(`vendor = ${p()}`); }
   if (f.poNumber) { args.push(f.poNumber); clauses.push(`"poNumber" = ${p()}`); }
+  if (f.fy) {
+    const b = fyBounds(f.fy);
+    if (b) {
+      // Por fecha de creación; sin fecha, cae al Reporting FY de la sábana.
+      args.push(b.start);
+      const pStart = p();
+      args.push(b.end);
+      const pEnd = p();
+      args.push(String(b.endYear));
+      const pFY = p();
+      clauses.push(
+        `(("poDate" >= ${pStart} AND "poDate" < ${pEnd}) OR ("poDate" IS NULL AND "reportingFY" = ${pFY}))`
+      );
+    }
+  }
   if (f.q) {
     args.push(`%${f.q}%`);
     const like = p();

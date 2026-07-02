@@ -14,6 +14,7 @@ export async function GET(req: NextRequest) {
     io: sp.get("io")?.trim() || undefined,
     vendor: sp.get("vendor")?.trim() || undefined,
     poNumber: sp.get("poNumber")?.trim() || undefined,
+    fy: sp.get("fy")?.trim() || undefined,
   });
   return NextResponse.json({ data, count: data.length });
 }

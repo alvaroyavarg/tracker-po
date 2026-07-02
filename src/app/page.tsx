@@ -40,24 +40,25 @@ interface DashboardData {
 
 const PIE_COLORS = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#64748b", "#ef4444"];
 
+const FY_OPTIONS = [
+  { value: "", label: "Todos" },
+  { value: "F26", label: "F26" },
+  { value: "F27", label: "F27" },
+];
+
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fy, setFy] = useState("F26");
 
   useEffect(() => {
-    fetch("/api/dashboard")
+    setLoading(true);
+    const params = fy ? `?fy=${fy}` : "";
+    fetch(`/api/dashboard${params}`)
       .then((r) => r.json())
       .then(setData)
       .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="p-8">
-        <Spinner label="Cargando dashboard…" />
-      </div>
-    );
-  }
+  }, [fy]);
 
   const empty = !data || data.totals.lineCount === 0;
   const currency = data?.totals.currency || "CLP";
@@ -70,14 +71,43 @@ export default function DashboardPage() {
     <div className="p-8 max-w-[1200px] mx-auto">
       <PageHeader
         title="Dashboard"
-        subtitle="Vista general de tus Purchase Orders y proyección de ejecución."
+        subtitle={
+          fy
+            ? `Año fiscal ${fy} · creadas ${fy === "F26" ? "01/07/2025 – 30/06/2026" : "01/07/2026 – 30/06/2027"}`
+            : "Todas las Purchase Orders, sin filtro de año fiscal."
+        }
+        actions={
+          <div className="flex items-center gap-1 rounded-xl border border-zinc-200 bg-white p-1">
+            {FY_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                onClick={() => setFy(o.value)}
+                className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                  fy === o.value
+                    ? "bg-accent text-white shadow-soft"
+                    : "text-ink-soft hover:bg-zinc-100"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        }
       />
 
-      {empty ? (
+      {loading ? (
+        <div className="py-16">
+          <Spinner label="Cargando dashboard…" />
+        </div>
+      ) : empty ? (
         <EmptyState
           icon={<Upload className="h-10 w-10" />}
-          title="Aún no hay Purchase Orders"
-          hint="Carga tu sábana en Excel o CSV para empezar a ver totales, ejecución y el forecast por IO."
+          title={fy ? `No hay Purchase Orders en ${fy}` : "Aún no hay Purchase Orders"}
+          hint={
+            fy
+              ? `Ninguna PO fue creada en el rango del ${fy}. Cambia el año fiscal arriba o carga una sábana con PO de ese período.`
+              : "Carga tu sábana en Excel o CSV para empezar a ver totales, ejecución y el forecast por IO."
+          }
           action={
             <Link href="/import" className="btn-primary">
               <Upload className="h-4 w-4" /> Cargar sábana

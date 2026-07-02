@@ -5,13 +5,14 @@ import { monthKey } from "@/lib/format";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/dashboard?io=
+// GET /api/dashboard?io=&fy=F26
 // Métricas agregadas + forecast mensual de ejecución por IO.
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const ioFilter = sp.get("io")?.trim() || undefined;
+  const fy = sp.get("fy")?.trim() || undefined;
 
-  const lines = await listPos({ io: ioFilter });
+  const lines = await listPos({ io: ioFilter, fy });
 
   const currencyCount: Record<string, number> = {};
   for (const p of lines) currencyCount[p.currency] = (currencyCount[p.currency] || 0) + 1;

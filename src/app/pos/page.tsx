@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, Suspense } from "react";
 import Link from "next/link";
-import { Search, Plus, Download, ChevronRight, Table2, Upload, Layers } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Search, Plus, Download, ChevronRight, Table2, Upload } from "lucide-react";
 import clsx from "clsx";
 import { PageHeader, StatusBadge, EmptyState, Spinner } from "@/components/ui";
 import { PoDrawer } from "@/components/PoDrawer";
@@ -10,6 +11,16 @@ import { PoLineDTO, PO_STATUSES, groupByPo, PoGroup } from "@/lib/types";
 import { formatMoney, formatDate } from "@/lib/format";
 
 export default function PosPage() {
+  return (
+    <Suspense fallback={<div className="p-8"><Spinner label="Cargando…" /></div>}>
+      <PosPageInner />
+    </Suspense>
+  );
+}
+
+function PosPageInner() {
+  const searchParams = useSearchParams();
+  const fy = searchParams.get("fy")?.toUpperCase() || "";
   const [rows, setRows] = useState<PoLineDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
@@ -25,11 +36,12 @@ export default function PosPage() {
     if (q) params.set("q", q);
     if (status) params.set("status", status);
     if (io) params.set("io", io);
+    if (fy) params.set("fy", fy);
     fetch(`/api/pos?${params.toString()}`)
       .then((r) => r.json())
       .then((d) => setRows(d.data || []))
       .finally(() => setLoading(false));
-  }, [q, status, io]);
+  }, [q, status, io, fy]);
 
   useEffect(() => {
     const t = setTimeout(load, 250);
@@ -70,13 +82,14 @@ export default function PosPage() {
     if (q) params.set("q", q);
     if (status) params.set("status", status);
     if (io) params.set("io", io);
+    if (fy) params.set("fy", fy);
     return `/api/export?${params.toString()}`;
   }
 
   return (
     <div className="p-8 max-w-[1300px] mx-auto">
       <PageHeader
-        title="Purchase Orders"
+        title={fy ? `Purchase Orders ${fy}` : "Purchase Orders"}
         subtitle={`${groups.length} PO · ${rows.length} líneas · Facturado ${formatMoney(invoicedSum, currency)} · Abierto ${formatMoney(openSum, currency)}`}
         actions={
           <>

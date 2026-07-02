@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     status: sp.get("status")?.trim() || undefined,
     io: sp.get("io")?.trim() || undefined,
     vendor: sp.get("vendor")?.trim() || undefined,
+    fy: sp.get("fy")?.trim() || undefined,
   });
 
   const rows = pos.map((p) => ({
