@@ -36,7 +36,7 @@ const SYNONYMS: Record<PoFieldKey, string[]> = {
   glAccount: ["g l account", "gl account", "cuenta gl", "cuenta contable", "cuenta"],
   glDescription: ["g l description", "gl description", "descripcion gl", "descripcion cuenta"],
   requisitioner: ["po requisitioner mail id", "requisitioner", "requisitioner mail", "solicitante mail", "mail solicitante"],
-  owner: ["owner", "buyer", "requestor", "requestor name", "responsable", "dueno", "solicitante", "comprador", "gestor", "brand manager", "requester", "requester name", "created by", "creado por"],
+  owner: ["requisitante", "owner", "buyer", "requestor", "requestor name", "responsable", "dueno", "solicitante", "comprador", "gestor", "brand manager", "requester", "requester name", "created by", "creado por"],
   reportingFY: ["reporting fy", "fy", "fiscal year", "ano fiscal"],
   totalPoValue: ["total po value", "valor total po", "monto total po", "po value"],
   lineValue: ["total po line value", "po line value", "valor linea", "monto linea", "line value", "monto", "valor", "importe"],
@@ -51,35 +51,38 @@ const SYNONYMS: Record<PoFieldKey, string[]> = {
 };
 
 // Dado el listado de encabezados de la sábana, sugiere el mapeo columna->campo.
+// El match exacto se resuelve por campo en orden de prioridad de sinónimos, para
+// que "Vendor Name1" le gane a "Vendor" (código) y "Internal Order" a "Cost center".
 export function autoMap(headers: string[]): Record<string, PoFieldKey | ""> {
   const mapping: Record<string, PoFieldKey | ""> = {};
   const used = new Set<PoFieldKey>();
+  const norms = headers.map(normalizeHeader);
 
-  // 1) match exacto contra sinónimos
-  for (const header of headers) {
-    const norm = normalizeHeader(header);
-    let best: PoFieldKey | "" = "";
-    for (const field of PO_FIELDS) {
-      if (used.has(field.key)) continue;
-      if (SYNONYMS[field.key].some((s) => s === norm)) {
-        best = field.key;
+  for (const header of headers) mapping[header] = "";
+
+  // 1) match exacto: por campo, recorriendo sus sinónimos en orden de prioridad
+  for (const field of PO_FIELDS) {
+    for (const syn of SYNONYMS[field.key]) {
+      const idx = norms.findIndex((n, i) => n === syn && !mapping[headers[i]]);
+      if (idx >= 0) {
+        mapping[headers[idx]] = field.key;
+        used.add(field.key);
         break;
       }
     }
-    mapping[header] = best;
-    if (best) used.add(best);
   }
   // 2) match parcial (contiene) para lo que quedó sin mapear
-  for (const header of headers) {
-    if (mapping[header]) continue;
-    const norm = normalizeHeader(header);
-    if (!norm) continue;
-    for (const field of PO_FIELDS) {
-      if (used.has(field.key)) continue;
-      if (SYNONYMS[field.key].some((s) => norm.includes(s) || s.includes(norm))) {
-        mapping[header] = field.key;
-        used.add(field.key);
-        break;
+  for (const field of PO_FIELDS) {
+    if (used.has(field.key)) continue;
+    outer: for (const syn of SYNONYMS[field.key]) {
+      for (let i = 0; i < headers.length; i++) {
+        const n = norms[i];
+        if (!n || mapping[headers[i]]) continue;
+        if (n.includes(syn) || syn.includes(n)) {
+          mapping[headers[i]] = field.key;
+          used.add(field.key);
+          break outer;
+        }
       }
     }
   }
