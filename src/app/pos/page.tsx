@@ -145,6 +145,7 @@ export default function PosPage() {
                   <Th className="text-right">Valor PO</Th>
                   <Th className="text-right">Facturado</Th>
                   <Th className="text-right">Abierto</Th>
+                  <Th>Estado</Th>
                   <Th className="w-32">Ejecución</Th>
                 </tr>
               </thead>
@@ -188,6 +189,8 @@ function GroupRows({
   const currency = g.lines[0]?.currency || "CLP";
   const pct = g.lineSum > 0 ? Math.min(100, (g.invoicedSum / g.lineSum) * 100) : 0;
   const multiIO = g.ios.length > 1;
+  // La PO está Cerrada solo cuando todas sus líneas lo están.
+  const groupStatus = g.lines.every((l) => l.status === "Cerrada") ? "Cerrada" : "Abierta";
 
   // Desglose por IO (cuando una PO se paga con más de un IO).
   const ioBreakdown = useMemoIoBreakdown(g);
@@ -229,6 +232,7 @@ function GroupRows({
         <td className="px-4 py-3 text-right tabular-nums text-amber-700 whitespace-nowrap">
           {formatMoney(g.openSum, currency)}
         </td>
+        <td className="px-4 py-3"><StatusBadge status={groupStatus} /></td>
         <td className="px-4 py-3 pr-5">
           <div className="flex items-center gap-2">
             <div className="flex-1 h-2 rounded-full bg-zinc-100 overflow-hidden">
@@ -241,7 +245,7 @@ function GroupRows({
 
       {expanded && (
         <tr className="bg-zinc-50/50">
-          <td colSpan={9} className="px-6 pb-4 pt-1">
+          <td colSpan={10} className="px-6 pb-4 pt-1">
             {multiIO && (
               <div className="flex flex-wrap gap-2 my-3">
                 {ioBreakdown.map((b) => (

@@ -66,7 +66,7 @@ function insertArgs(id: string, input: PoInput, now: string): any[] {
     input.invoicedAmount ?? 0,
     input.openAmount ?? 0,
     N(input.currency) ?? "CLP",
-    N(input.status) ?? "Pendiente",
+    N(input.status) ?? "Abierta",
     ISO(input.poDate),
     ISO(input.deliveryDate),
     ISO(input.executionDate),
@@ -206,13 +206,12 @@ export async function getEvents(poId: string) {
   return q('SELECT * FROM line_events WHERE "poId" = $1 ORDER BY "createdAt" DESC', [poId]);
 }
 
-// Estados que la app puede pisar automáticamente; los demás son decisión manual.
-const AUTO_STATUSES = new Set(["Pendiente", "En proceso", "Facturada"]);
+// Solo las líneas Abiertas cambian de estado automáticamente (a Cerrada al
+// facturar el 100%). Una línea cerrada a mano no se reabre sola.
+const AUTO_STATUSES = new Set(["Abierta"]);
 
 function deriveStatus(lineValue: number, invoiced: number, open: number): string {
-  if (lineValue > 0 && open <= 1) return "Facturada";
-  if (invoiced > 0) return "En proceso";
-  return "Pendiente";
+  return lineValue > 0 && open <= 1 ? "Cerrada" : "Abierta";
 }
 
 // Registra una facturación manual (incremental): actualiza montos, estado y bitácora.
@@ -493,7 +492,7 @@ export function toDTO(row: any): PoLineDTO {
     invoicedAmount: row.invoicedAmount ?? 0,
     openAmount: row.openAmount ?? 0,
     currency: row.currency ?? "CLP",
-    status: row.status ?? "Pendiente",
+    status: row.status ?? "Abierta",
     poDate: row.poDate ?? null,
     deliveryDate: row.deliveryDate ?? null,
     executionDate: row.executionDate ?? null,

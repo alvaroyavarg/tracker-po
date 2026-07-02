@@ -43,7 +43,6 @@ const SYNONYMS: Record<PoFieldKey, string[]> = {
   invoicedAmount: ["as of today total invoice", "total invoice", "invoice", "facturado", "invoiced", "ejecutado", "gr amount", "receipted"],
   openAmount: ["open po line value", "open po value", "open value", "saldo abierto", "saldo", "open amount", "pendiente", "por ejecutar", "restante"],
   currency: ["moneda", "currency", "divisa"],
-  status: ["estado", "status", "situacion", "etapa", "po status"],
   poDate: ["po creation date coupa", "po creation date sap", "po creation date", "fecha creacion", "fecha emision", "fecha po", "fecha oc", "po date", "creation date"],
   deliveryDate: ["delivery date", "fecha entrega", "entrega", "fecha recepcion", "recepcion"],
   executionDate: ["mes ejecucion", "fecha ejecucion", "mes de ejecucion", "ejecucion", "periodo", "forecast"],

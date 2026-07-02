@@ -51,13 +51,8 @@ export async function POST(req: NextRequest) {
         ? coerceNumber(r.openAmount)
         : Math.max(0, lineValue - invoiced);
 
-    // Estado automático según ejecución (si la sábana no trae estado).
-    let status = coerceText(r.status);
-    if (!status) {
-      if (lineValue > 0 && openAmount <= 1) status = "Facturada";
-      else if (invoiced > 0) status = "En proceso";
-      else status = "Pendiente";
-    }
+    // Estado según ejecución: Cerrada si está 100% facturada, si no Abierta.
+    const status = lineValue > 0 && openAmount <= 1 ? "Cerrada" : "Abierta";
 
     records.push({
       poNumber,

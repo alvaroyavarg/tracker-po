@@ -47,7 +47,7 @@ const SCHEMA = `
     "invoicedAmount" DOUBLE PRECISION NOT NULL DEFAULT 0,
     "openAmount"   DOUBLE PRECISION NOT NULL DEFAULT 0,
     currency       TEXT NOT NULL DEFAULT 'CLP',
-    status         TEXT NOT NULL DEFAULT 'Pendiente',
+    status         TEXT NOT NULL DEFAULT 'Abierta',
     "poDate"       TEXT,
     "deliveryDate" TEXT,
     "executionDate" TEXT,
@@ -95,10 +95,21 @@ const SCHEMA = `
   );
 `;
 
+// Normaliza estados antiguos al modelo Abierta/Cerrada (idempotente: tras la
+// primera pasada la cláusula WHERE no encuentra filas).
+const NORMALIZE_STATUSES = `
+  UPDATE po_lines SET status = CASE
+    WHEN status IN ('Cerrada', 'Facturada', 'Pagada', 'Anulada') THEN 'Cerrada'
+    ELSE 'Abierta'
+  END
+  WHERE status NOT IN ('Abierta', 'Cerrada');
+`;
+
 async function ensureSchema(): Promise<void> {
   if (!globalForDb._schemaReady) {
     globalForDb._schemaReady = getPool()
       .query(SCHEMA)
+      .then(() => getPool().query(NORMALIZE_STATUSES))
       .then(() => undefined)
       .catch((e) => {
         globalForDb._schemaReady = undefined;

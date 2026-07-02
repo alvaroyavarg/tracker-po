@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
         ? coerceNumber(body.openAmount)
         : Math.max(0, lineValue - invoiced),
     currency: coerceText(body.currency) || "CLP",
-    status: coerceText(body.status) || "Pendiente",
+    status: coerceText(body.status) || "Abierta",
     poDate: coerceDate(body.poDate),
     deliveryDate: coerceDate(body.deliveryDate),
     executionDate: coerceDate(body.executionDate),
