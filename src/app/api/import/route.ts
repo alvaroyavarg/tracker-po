@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bulkCreate, clearAllPos, PoInput } from "@/lib/repo";
+import { bulkCreate, clearAllPos, createSnapshot, listPos, reconcileImport, PoInput } from "@/lib/repo";
 import { coerceDate, coerceNumber, coerceText, matchesOwner } from "@/lib/coerce";
 
 export const runtime = "nodejs";
@@ -9,14 +9,16 @@ export const dynamic = "force-dynamic";
 // body: {
 //   rows: Array<Record<field, value>>,   filas ya mapeadas a campos canónicos
 //   raw?: any[],                          filas originales de la sábana
-//   mode: "append" | "replace",
+//   mode: "update" | "append" | "replace",  update = actualización semanal acumulativa
+//   closeAbsent?: boolean,                en "update": cerrar líneas que no vienen (default true)
 //   ownerFilter?: string                  ej: "Alvaro Yavar" — descarta lo que no calce
 // }
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const rows: any[] = Array.isArray(body.rows) ? body.rows : [];
   const raws: any[] = Array.isArray(body.raw) ? body.raw : [];
-  const mode: string = body.mode === "replace" ? "replace" : "append";
+  const mode: string = ["update", "replace", "append"].includes(body.mode) ? body.mode : "update";
+  const closeAbsent: boolean = body.closeAbsent !== false;
   const ownerFilter: string = coerceText(body.ownerFilter) || "";
 
   if (rows.length === 0) {
@@ -93,9 +95,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (mode === "replace") clearAllPos();
-  const imported = bulkCreate(records);
   const skipped = rows.length - records.length - filteredOut;
 
+  if (mode === "update") {
+    // Respaldo automático antes de reconciliar, por si hay que volver atrás.
+    if (listPos().length > 0) {
+      const stamp = new Date().toLocaleDateString("es-CL");
+      createSnapshot(`Auto — antes de carga semanal ${stamp}`, null);
+    }
+    const summary = reconcileImport(records, closeAbsent);
+    return NextResponse.json({ mode, skipped, filteredOut, summary });
+  }
+
+  if (mode === "replace") clearAllPos();
+  const imported = bulkCreate(records);
   return NextResponse.json({ imported, skipped, filteredOut, mode });
 }

@@ -8,7 +8,7 @@ import path from "node:path";
 
 const DB_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DB_DIR, "tracker.db");
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const globalForDb = globalThis as unknown as { _db?: DatabaseSync };
 
@@ -17,18 +17,26 @@ function init(): DatabaseSync {
   const db = new DatabaseSync(DB_PATH);
   db.exec("PRAGMA journal_mode = WAL;");
 
-  // Si el esquema cambió de versión, se recrea (los datos se recargan desde la sábana).
+  // Migraciones: v2 fue el último esquema destructivo; desde ahí son aditivas.
   const row = db.prepare("PRAGMA user_version").get() as any;
   const version = Number(row?.user_version ?? 0);
-  if (version !== SCHEMA_VERSION) {
+  if (version < 2) {
     db.exec(`
       DROP TABLE IF EXISTS purchase_orders;
       DROP TABLE IF EXISTS po_lines;
       DROP TABLE IF EXISTS status_changes;
       DROP TABLE IF EXISTS snapshots;
     `);
-    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
+  if (version < 3 && version >= 2) {
+    // v3: columna de última aparición en una carga (para la reconciliación semanal).
+    try {
+      db.exec("ALTER TABLE po_lines ADD COLUMN lastSeenAt TEXT");
+    } catch {
+      // la columna ya existe
+    }
+  }
+  if (version !== SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS po_lines (
@@ -54,6 +62,7 @@ function init(): DatabaseSync {
       executionDate  TEXT,
       notes          TEXT,
       raw            TEXT,
+      lastSeenAt     TEXT,
       createdAt      TEXT NOT NULL,
       updatedAt      TEXT NOT NULL
     );
@@ -71,6 +80,21 @@ function init(): DatabaseSync {
       createdAt  TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_sc_po ON status_changes(poId);
+
+    -- Bitácora de actividad por línea: facturación manual, avances detectados
+    -- en la carga semanal, cierres por ausencia, creaciones.
+    CREATE TABLE IF NOT EXISTS line_events (
+      id        TEXT PRIMARY KEY,
+      poId      TEXT NOT NULL,
+      type      TEXT NOT NULL, -- manual_invoice | invoice_progress | closed_absent | created | amounts_updated
+      amount    REAL,
+      prevValue REAL,
+      newValue  REAL,
+      note      TEXT,
+      source    TEXT NOT NULL DEFAULT 'manual', -- manual | import
+      createdAt TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_po ON line_events(poId);
 
     CREATE TABLE IF NOT EXISTS snapshots (
       id          TEXT PRIMARY KEY,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPo, getHistory, updatePo, deletePo, addStatusChange } from "@/lib/repo";
+import { getPo, getHistory, getEvents, updatePo, deletePo, addStatusChange } from "@/lib/repo";
 import { coerceDate, coerceNumber, coerceText } from "@/lib/coerce";
 
 export const runtime = "nodejs";
@@ -8,7 +8,9 @@ export const dynamic = "force-dynamic";
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const po = getPo(params.id);
   if (!po) return NextResponse.json({ error: "No encontrada" }, { status: 404 });
-  return NextResponse.json({ data: { ...po, history: getHistory(params.id) } });
+  return NextResponse.json({
+    data: { ...po, history: getHistory(params.id), events: getEvents(params.id) },
+  });
 }
 
 // PATCH /api/pos/[id] -> edición parcial. Registra cambios de estado.

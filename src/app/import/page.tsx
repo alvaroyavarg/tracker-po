@@ -3,12 +3,24 @@
 import { useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
-import { UploadCloud, FileSpreadsheet, ArrowRight, Check, X, UserCheck } from "lucide-react";
+import {
+  UploadCloud, FileSpreadsheet, ArrowRight, Check, X, UserCheck,
+  PlusCircle, TrendingUp, PackageX, MinusCircle, RefreshCw,
+} from "lucide-react";
 import { PageHeader } from "@/components/ui";
 import { PO_FIELDS, PoFieldKey } from "@/lib/types";
 import { autoMap, matchesOwner } from "@/lib/coerce";
 
-type Step = "upload" | "map";
+type Step = "upload" | "map" | "done";
+
+interface Summary {
+  created: number;
+  progressed: number;
+  updated: number;
+  closed: number;
+  unchanged: number;
+  invoicedDelta: number;
+}
 
 interface SheetData {
   headers: string[];
@@ -43,12 +55,14 @@ export default function ImportPage() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [rawRows, setRawRows] = useState<Record<string, any>[]>([]);
   const [mapping, setMapping] = useState<Record<string, PoFieldKey | "">>({});
-  const [mode, setMode] = useState<"append" | "replace">("append");
+  const [mode, setMode] = useState<"update" | "append" | "replace">("update");
+  const [closeAbsent, setCloseAbsent] = useState(true);
   const [ownerEnabled, setOwnerEnabled] = useState(true);
   const [ownerFilter, setOwnerFilter] = useState("Alvaro Yavar");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [summary, setSummary] = useState<Summary | null>(null);
 
   function pickSheet(wb: XLSX.WorkBook, name: string) {
     const data = readSheet(wb.Sheets[name]);
@@ -146,6 +160,7 @@ export default function ImportPage() {
           rows,
           raw: rawRows,
           mode,
+          closeAbsent,
           ownerFilter: ownerEnabled ? ownerFilter.trim() : "",
         }),
       });
@@ -154,7 +169,12 @@ export default function ImportPage() {
         setError(data.error || "Error al importar.");
         return;
       }
-      router.push("/pos");
+      if (mode === "update" && data.summary) {
+        setSummary(data.summary);
+        setStep("done");
+      } else {
+        router.push("/pos");
+      }
     } finally {
       setBusy(false);
     }
@@ -167,11 +187,13 @@ export default function ImportPage() {
         subtitle="Sube tu Excel o CSV. Se detectan las columnas útiles, se ignora el resto y se filtra lo que no te pertenece."
       />
 
-      <div className="flex items-center gap-3 mb-6 text-sm">
-        <StepPill n={1} label="Subir archivo" active={step === "upload"} done={step === "map"} />
-        <div className="h-px w-8 bg-zinc-200" />
-        <StepPill n={2} label="Mapear y filtrar" active={step === "map"} done={false} />
-      </div>
+      {step !== "done" && (
+        <div className="flex items-center gap-3 mb-6 text-sm">
+          <StepPill n={1} label="Subir archivo" active={step === "upload"} done={step === "map"} />
+          <div className="h-px w-8 bg-zinc-200" />
+          <StepPill n={2} label="Mapear y filtrar" active={step === "map"} done={false} />
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-sm text-rose-700 flex items-center gap-2">
@@ -381,25 +403,110 @@ export default function ImportPage() {
           </div>
 
           {/* Modo + acción */}
-          <div className="card p-5 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="label">Modo de importación</p>
-              <div className="flex gap-2">
-                <ModeBtn active={mode === "append"} onClick={() => setMode("append")} label="Agregar" hint="Suma a lo existente" />
-                <ModeBtn active={mode === "replace"} onClick={() => setMode("replace")} label="Reemplazar" hint="Borra todo y carga de nuevo" />
+          <div className="card p-5 flex flex-col gap-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="label">Modo de importación</p>
+                <div className="flex gap-2 flex-wrap">
+                  <ModeBtn
+                    active={mode === "update"}
+                    onClick={() => setMode("update")}
+                    label="Actualización semanal ★"
+                    hint="Compara con lo existente: registra avances, crea nuevas y cierra las que no vienen. Conserva tus notas y estados."
+                  />
+                  <ModeBtn active={mode === "append"} onClick={() => setMode("append")} label="Agregar" hint="Suma filas sin comparar" />
+                  <ModeBtn active={mode === "replace"} onClick={() => setMode("replace")} label="Reemplazar" hint="Borra todo y carga de nuevo" />
+                </div>
+                {mode === "update" && (
+                  <label className="flex items-center gap-2 text-xs text-ink-soft cursor-pointer mt-3">
+                    <input
+                      type="checkbox"
+                      checked={closeAbsent}
+                      onChange={(e) => setCloseAbsent(e.target.checked)}
+                      className="h-4 w-4 rounded border-zinc-300 text-accent focus:ring-accent/30"
+                    />
+                    Cerrar líneas que no vienen en este archivo (facturadas completas)
+                  </label>
+                )}
+              </div>
+              <button
+                onClick={doImport}
+                disabled={busy || !hasPoNumber || filterStats.pass === 0}
+                className="btn-primary"
+              >
+                <Check className="h-4 w-4" />
+                {busy ? "Procesando…" : mode === "update" ? `Actualizar con ${filterStats.pass} filas` : `Importar ${filterStats.pass} filas`}
+              </button>
+            </div>
+            {mode === "update" && (
+              <p className="text-[11px] text-ink-muted">
+                Se crea un respaldo automático antes de aplicar los cambios, por si necesitas volver atrás.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {step === "done" && summary && (
+        <div className="flex flex-col gap-5">
+          <div className="card p-6">
+            <div className="flex items-center gap-3 mb-1">
+              <span className="grid place-items-center h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600">
+                <Check className="h-5 w-5" />
+              </span>
+              <div>
+                <h3 className="font-semibold text-ink">Actualización semanal aplicada</h3>
+                <p className="text-xs text-ink-muted">
+                  Se guardó un respaldo automático antes de los cambios (pestaña Respaldos).
+                </p>
               </div>
             </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            <SummaryCard icon={<PlusCircle className="h-4 w-4" />} tone="text-accent bg-accent-soft" value={summary.created} label="Líneas nuevas" />
+            <SummaryCard icon={<TrendingUp className="h-4 w-4" />} tone="text-emerald-600 bg-emerald-50" value={summary.progressed} label="Con avance de facturación" />
+            <SummaryCard icon={<PackageX className="h-4 w-4" />} tone="text-zinc-600 bg-zinc-100" value={summary.closed} label="Cerradas (no vinieron)" />
+            <SummaryCard icon={<RefreshCw className="h-4 w-4" />} tone="text-sky-600 bg-sky-50" value={summary.updated} label="Con otros cambios" />
+            <SummaryCard icon={<MinusCircle className="h-4 w-4" />} tone="text-zinc-500 bg-zinc-50" value={summary.unchanged} label="Sin cambios" />
+          </div>
+          {summary.invoicedDelta > 0 && (
+            <div className="card p-5">
+              <p className="text-sm text-ink-soft">
+                Facturación detectada en esta carga:{" "}
+                <span className="font-semibold text-emerald-700">
+                  {new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(summary.invoicedDelta)}
+                </span>
+              </p>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button onClick={() => router.push("/pos")} className="btn-primary">Ver Purchase Orders</button>
+            <button onClick={() => router.push("/")} className="btn-outline">Ir al Dashboard</button>
             <button
-              onClick={doImport}
-              disabled={busy || !hasPoNumber || filterStats.pass === 0}
-              className="btn-primary"
+              onClick={() => {
+                setStep("upload");
+                setSummary(null);
+                setHeaders([]);
+                setRawRows([]);
+                setWorkbook(null);
+              }}
+              className="btn-ghost"
             >
-              <Check className="h-4 w-4" />
-              {busy ? "Importando…" : `Importar ${filterStats.pass} filas`}
+              Cargar otro archivo
             </button>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SummaryCard({ icon, tone, value, label }: { icon: React.ReactNode; tone: string; value: number; label: string }) {
+  return (
+    <div className="card p-4">
+      <span className={`grid place-items-center h-8 w-8 rounded-lg mb-2 ${tone}`}>{icon}</span>
+      <div className="text-2xl font-semibold text-ink">{value}</div>
+      <div className="text-[11px] text-ink-muted mt-0.5">{label}</div>
     </div>
   );
 }

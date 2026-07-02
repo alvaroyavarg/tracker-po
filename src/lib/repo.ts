@@ -155,6 +155,251 @@ export function addStatusChange(poId: string, fromStatus: string | null, toStatu
     .run(newId(), poId, N(fromStatus), toStatus, N(note), nowIso());
 }
 
+// --- Bitácora de actividad por línea ---
+
+export type LineEventType =
+  | "manual_invoice"
+  | "invoice_progress"
+  | "closed_absent"
+  | "created"
+  | "amounts_updated";
+
+export function addEvent(
+  poId: string,
+  type: LineEventType,
+  opts: { amount?: number | null; prevValue?: number | null; newValue?: number | null; note?: string | null; source?: "manual" | "import" } = {}
+) {
+  getDb()
+    .prepare(
+      "INSERT INTO line_events (id, poId, type, amount, prevValue, newValue, note, source, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .run(
+      newId(),
+      poId,
+      type,
+      opts.amount ?? null,
+      opts.prevValue ?? null,
+      opts.newValue ?? null,
+      N(opts.note),
+      opts.source ?? "manual",
+      nowIso()
+    );
+}
+
+export function getEvents(poId: string) {
+  return getDb()
+    .prepare("SELECT * FROM line_events WHERE poId = ? ORDER BY createdAt DESC")
+    .all(poId) as any[];
+}
+
+// Estados que la app puede pisar automáticamente; los demás son decisión manual.
+const AUTO_STATUSES = new Set(["Pendiente", "En proceso", "Facturada"]);
+
+function deriveStatus(lineValue: number, invoiced: number, open: number): string {
+  if (lineValue > 0 && open <= 1) return "Facturada";
+  if (invoiced > 0) return "En proceso";
+  return "Pendiente";
+}
+
+// Registra una facturación manual (incremental): actualiza montos, estado y bitácora.
+export function registerInvoice(
+  id: string,
+  amount: number,
+  note?: string | null
+): PoLineDTO | null {
+  const po = getPo(id);
+  if (!po) return null;
+  const prevInvoiced = po.invoicedAmount || 0;
+  const newInvoiced = Math.max(0, prevInvoiced + amount);
+  const newOpen = Math.max(0, (po.lineValue || 0) - newInvoiced);
+
+  const patch: Partial<PoInput> = { invoicedAmount: newInvoiced, openAmount: newOpen };
+  if (AUTO_STATUSES.has(po.status)) {
+    const st = deriveStatus(po.lineValue || 0, newInvoiced, newOpen);
+    if (st !== po.status) {
+      patch.status = st;
+      addStatusChange(id, po.status, st, "Ajuste por facturación manual");
+    }
+  }
+  const updated = updatePo(id, patch);
+  addEvent(id, "manual_invoice", {
+    amount,
+    prevValue: prevInvoiced,
+    newValue: newInvoiced,
+    note,
+    source: "manual",
+  });
+  return updated;
+}
+
+// --- Reconciliación semanal ---
+
+const lineKey = (poNumber: string, poLine: string | null, io: string | null) =>
+  `${poNumber}||${poLine ?? ""}||${io ?? ""}`;
+
+export interface ReconcileSummary {
+  created: number;
+  progressed: number; // facturación avanzó
+  updated: number; // otros montos/datos cambiaron
+  closed: number; // no vinieron en la sábana -> facturadas completas y cerradas
+  unchanged: number;
+  invoicedDelta: number; // total facturado detectado en esta carga
+}
+
+// Aplica la sábana semanal contra lo existente:
+// - línea existente: actualiza montos/datos de sábana, conserva notas/mes de
+//   ejecución/estados manuales, y registra el avance de facturación.
+// - línea nueva: se crea.
+// - línea existente que no viene: se asume facturada completa -> Cerrada.
+export function reconcileImport(records: PoInput[], closeAbsent: boolean): ReconcileSummary {
+  const db = getDb();
+  const now = nowIso();
+  const summary: ReconcileSummary = {
+    created: 0,
+    progressed: 0,
+    updated: 0,
+    closed: 0,
+    unchanged: 0,
+    invoicedDelta: 0,
+  };
+
+  // La misma llave PO+línea+IO puede venir repetida legítimamente en la sábana,
+  // así que se empareja ocurrencia contra ocurrencia (eligiendo la candidata con
+  // el valor de línea más parecido).
+  const existing = listPos();
+  const byKey = new Map<string, PoLineDTO[]>();
+  for (const l of existing) {
+    const k = lineKey(l.poNumber, l.poLine, l.io);
+    const arr = byKey.get(k) || [];
+    arr.push(l);
+    byKey.set(k, arr);
+  }
+  const matchedIds = new Set<string>();
+
+  db.exec("BEGIN");
+  try {
+    for (const r of records) {
+      const key = lineKey(r.poNumber, (r.poLine as string) ?? null, (r.io as string) ?? null);
+      const candidates = (byKey.get(key) || []).filter((c) => !matchedIds.has(c.id));
+
+      if (candidates.length === 0) {
+        // Línea nueva
+        const created = createPo({ ...r });
+        db.prepare("UPDATE po_lines SET lastSeenAt = ? WHERE id = ?").run(now, created.id);
+        addEvent(created.id, "created", {
+          newValue: r.invoicedAmount ?? 0,
+          note: "Línea nueva en la sábana",
+          source: "import",
+        });
+        summary.created++;
+        continue;
+      }
+
+      const targetValue = r.lineValue ?? 0;
+      const prev = candidates.reduce((best, c) =>
+        Math.abs((c.lineValue || 0) - targetValue) < Math.abs((best.lineValue || 0) - targetValue) ? c : best
+      );
+      matchedIds.add(prev.id);
+
+      const prevInvoiced = prev.invoicedAmount || 0;
+      const newInvoiced = r.invoicedAmount ?? 0;
+      const delta = newInvoiced - prevInvoiced;
+      const diff = (a: number, b: number) => Math.abs(a - b) > 0.005;
+      const amountsChanged =
+        diff(r.lineValue ?? 0, prev.lineValue) ||
+        diff(r.openAmount ?? 0, prev.openAmount) ||
+        diff(newInvoiced, prevInvoiced) ||
+        diff(r.totalPoValue ?? 0, prev.totalPoValue);
+
+      // Datos que se refrescan desde la sábana. Notas, mes de ejecución y
+      // estados manuales del usuario NO se tocan.
+      const patch: Partial<PoInput> = {
+        vendor: r.vendor ?? prev.vendor,
+        description: r.description ?? prev.description,
+        glAccount: r.glAccount ?? prev.glAccount,
+        glDescription: r.glDescription ?? prev.glDescription,
+        requisitioner: r.requisitioner ?? prev.requisitioner,
+        owner: r.owner ?? prev.owner,
+        reportingFY: r.reportingFY ?? prev.reportingFY,
+        totalPoValue: r.totalPoValue ?? prev.totalPoValue,
+        lineValue: r.lineValue ?? prev.lineValue,
+        invoicedAmount: newInvoiced,
+        openAmount: r.openAmount ?? prev.openAmount,
+        currency: r.currency ?? prev.currency,
+        poDate: r.poDate ?? prev.poDate,
+        deliveryDate: r.deliveryDate ?? prev.deliveryDate,
+        raw: r.raw ?? undefined,
+      };
+      if (AUTO_STATUSES.has(prev.status)) {
+        const st = deriveStatus(
+          patch.lineValue as number,
+          newInvoiced,
+          (patch.openAmount as number) ?? 0
+        );
+        if (st !== prev.status) {
+          patch.status = st;
+          addStatusChange(prev.id, prev.status, st, "Actualización semanal");
+        }
+      }
+      updatePo(prev.id, patch);
+      db.prepare("UPDATE po_lines SET lastSeenAt = ? WHERE id = ?").run(now, prev.id);
+
+      if (delta > 0.005) {
+        addEvent(prev.id, "invoice_progress", {
+          amount: delta,
+          prevValue: prevInvoiced,
+          newValue: newInvoiced,
+          note: "Avance de facturación detectado en la sábana",
+          source: "import",
+        });
+        summary.progressed++;
+        summary.invoicedDelta += delta;
+      } else if (amountsChanged) {
+        addEvent(prev.id, "amounts_updated", {
+          prevValue: prev.lineValue,
+          newValue: (patch.lineValue as number) ?? prev.lineValue,
+          note: "Montos actualizados desde la sábana",
+          source: "import",
+        });
+        summary.updated++;
+      } else {
+        summary.unchanged++;
+      }
+    }
+
+    // Líneas que no vinieron: facturadas completas y cerradas.
+    if (closeAbsent) {
+      for (const prev of existing) {
+        if (matchedIds.has(prev.id)) continue;
+        if (prev.status === "Cerrada" || prev.status === "Anulada") continue;
+        const prevInvoiced = prev.invoicedAmount || 0;
+        const finalInvoiced = prev.lineValue || prevInvoiced;
+        updatePo(prev.id, {
+          invoicedAmount: finalInvoiced,
+          openAmount: 0,
+          status: "Cerrada",
+        });
+        addStatusChange(prev.id, prev.status, "Cerrada", "No vino en la sábana semanal");
+        addEvent(prev.id, "closed_absent", {
+          amount: Math.max(0, finalInvoiced - prevInvoiced),
+          prevValue: prevInvoiced,
+          newValue: finalInvoiced,
+          note: "Facturada completa: la línea ya no aparece en la sábana",
+          source: "import",
+        });
+        summary.closed++;
+        summary.invoicedDelta += Math.max(0, finalInvoiced - prevInvoiced);
+      }
+    }
+
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return summary;
+}
+
 export function deletePo(id: string) {
   const db = getDb();
   db.prepare("DELETE FROM status_changes WHERE poId = ?").run(id);

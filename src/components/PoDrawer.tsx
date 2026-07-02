@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { X, Trash2, Save } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { X, Trash2, Save, Receipt, CircleDot, PackageX, PlusCircle, RefreshCw } from "lucide-react";
 import { PO_STATUSES, PoLineDTO } from "@/lib/types";
 import { formatDate, formatMoney } from "@/lib/format";
 
@@ -41,7 +41,30 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
   const [form, setForm] = useState<Record<string, string>>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
+  const [invAmount, setInvAmount] = useState("");
+  const [invNote, setInvNote] = useState("");
+  const [invBusy, setInvBusy] = useState(false);
   const isNew = !po;
+
+  const loadDetail = useCallback(() => {
+    if (!po) return;
+    fetch(`/api/pos/${po.id}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setHistory(d.data?.history || []);
+        setEvents(d.data?.events || []);
+        if (d.data) {
+          setForm((f) => ({
+            ...f,
+            invoicedAmount: String(d.data.invoicedAmount ?? ""),
+            openAmount: String(d.data.openAmount ?? ""),
+            status: d.data.status || f.status,
+          }));
+        }
+      })
+      .catch(() => {});
+  }, [po]);
 
   useEffect(() => {
     if (po) {
@@ -64,15 +87,43 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
         executionDate: toInputDate(po.executionDate),
         notes: po.notes || "",
       });
-      fetch(`/api/pos/${po.id}`)
-        .then((r) => r.json())
-        .then((d) => setHistory(d.data?.history || []))
-        .catch(() => setHistory([]));
+      loadDetail();
     } else {
       setForm(emptyForm);
       setHistory([]);
+      setEvents([]);
     }
-  }, [po, open]);
+    setInvAmount("");
+    setInvNote("");
+  }, [po, open, loadDetail]);
+
+  async function registerInvoice() {
+    if (!po) return;
+    const amount = parseFloat(invAmount);
+    if (!amount) {
+      alert("Indica el monto facturado (puede ser negativo para corregir)");
+      return;
+    }
+    setInvBusy(true);
+    try {
+      const res = await fetch(`/api/pos/${po.id}/invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount, note: invNote.trim() || undefined }),
+      });
+      if (!res.ok) {
+        const e = await res.json();
+        alert(e.error || "Error al registrar");
+        return;
+      }
+      setInvAmount("");
+      setInvNote("");
+      loadDetail();
+      onSaved();
+    } finally {
+      setInvBusy(false);
+    }
+  }
 
   function set(key: string, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -228,18 +279,42 @@ export function PoDrawer({ po, open, onClose, onSaved }: Props) {
             <textarea className="input min-h-[70px] resize-y" value={form.notes} onChange={(e) => set("notes", e.target.value)} />
           </Field>
 
-          {!isNew && history.length > 0 && (
+          {!isNew && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Receipt className="h-4 w-4 text-emerald-600" />
+                <p className="text-sm font-semibold text-ink">Registrar facturación</p>
+              </div>
+              <p className="text-[11px] text-ink-muted mb-3">
+                Suma al facturado y descuenta del saldo abierto. Queda registrado en la
+                actividad de la línea. Usa monto negativo para corregir.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  className="input w-36"
+                  type="number"
+                  placeholder="Monto"
+                  value={invAmount}
+                  onChange={(e) => setInvAmount(e.target.value)}
+                />
+                <input
+                  className="input flex-1"
+                  placeholder="Nota (opcional): factura, HES…"
+                  value={invNote}
+                  onChange={(e) => setInvNote(e.target.value)}
+                />
+                <button onClick={registerInvoice} disabled={invBusy} className="btn-primary shrink-0 !bg-emerald-600 hover:!bg-emerald-700">
+                  {invBusy ? "…" : "Registrar"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!isNew && (events.length > 0 || history.length > 0) && (
             <div>
-              <p className="label">Historial de estados</p>
-              <div className="flex flex-col gap-2">
-                {history.map((h) => (
-                  <div key={h.id} className="text-xs text-ink-muted flex items-center gap-2">
-                    <span className="text-ink-soft">
-                      {h.fromStatus || "—"} → <span className="font-medium text-ink">{h.toStatus}</span>
-                    </span>
-                    <span className="text-zinc-400">· {formatDate(h.createdAt)}</span>
-                  </div>
-                ))}
+              <p className="label">Actividad</p>
+              <div className="flex flex-col gap-2.5">
+                <ActivityTimeline events={events} history={history} currency={form.currency} />
               </div>
             </div>
           )}
@@ -268,5 +343,91 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="label">{label}</span>
       {children}
     </label>
+  );
+}
+
+// Fusiona eventos de facturación y cambios de estado en una sola línea de tiempo.
+function ActivityTimeline({
+  events,
+  history,
+  currency,
+}: {
+  events: any[];
+  history: any[];
+  currency: string;
+}) {
+  const items = [
+    ...events.map((e) => ({ ...e, kind: "event" })),
+    ...history.map((h) => ({ ...h, kind: "status" })),
+  ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+  if (items.length === 0) return null;
+
+  return (
+    <>
+      {items.map((it) => {
+        if (it.kind === "status") {
+          return (
+            <div key={`s-${it.id}`} className="flex items-start gap-2.5 text-xs">
+              <CircleDot className="h-3.5 w-3.5 text-zinc-400 mt-0.5 shrink-0" />
+              <div>
+                <span className="text-ink-soft">
+                  Estado: {it.fromStatus || "—"} → <span className="font-medium text-ink">{it.toStatus}</span>
+                </span>
+                {it.note && <span className="text-ink-muted"> · {it.note}</span>}
+                <div className="text-[10px] text-zinc-400">{formatDate(it.createdAt)}</div>
+              </div>
+            </div>
+          );
+        }
+        const cfg: Record<string, { icon: any; cls: string; label: (e: any) => string }> = {
+          manual_invoice: {
+            icon: Receipt,
+            cls: "text-emerald-600",
+            label: (e) => `Facturación manual: ${formatMoney(e.amount || 0, currency)}`,
+          },
+          invoice_progress: {
+            icon: RefreshCw,
+            cls: "text-emerald-600",
+            label: (e) => `Sábana: se facturó ${formatMoney(e.amount || 0, currency)}`,
+          },
+          closed_absent: {
+            icon: PackageX,
+            cls: "text-zinc-500",
+            label: () => "Cerrada: no vino en la sábana semanal (facturada completa)",
+          },
+          created: {
+            icon: PlusCircle,
+            cls: "text-accent",
+            label: () => "Línea creada desde la sábana",
+          },
+          amounts_updated: {
+            icon: RefreshCw,
+            cls: "text-zinc-500",
+            label: () => "Montos actualizados desde la sábana",
+          },
+        };
+        const c = cfg[it.type] || cfg.amounts_updated;
+        const Icon = c.icon;
+        return (
+          <div key={`e-${it.id}`} className="flex items-start gap-2.5 text-xs">
+            <Icon className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${c.cls}`} />
+            <div>
+              <span className="text-ink-soft">{c.label(it)}</span>
+              {it.note && it.type === "manual_invoice" && (
+                <span className="text-ink-muted"> · {it.note}</span>
+              )}
+              {it.prevValue != null && it.newValue != null && it.type !== "created" && (
+                <span className="text-ink-muted">
+                  {" "}
+                  ({formatMoney(it.prevValue, currency)} → {formatMoney(it.newValue, currency)})
+                </span>
+              )}
+              <div className="text-[10px] text-zinc-400">{formatDate(it.createdAt)}</div>
+            </div>
+          </div>
+        );
+      })}
+    </>
   );
 }

@@ -8,6 +8,17 @@ Diseño limpio y moderno estilo Folk, hecho con Tailwind.
 
 ## Funcionalidades
 
+- **Carga semanal acumulativa (reconciliación)**: el modo "Actualización semanal"
+  compara la sábana nueva contra lo existente (llave PO + línea + IO, tolerante a
+  llaves repetidas): registra los avances de facturación detectados, crea las
+  líneas nuevas y **cierra como facturadas completas las que ya no vienen en el
+  archivo**. Conserva tus notas, mes de ejecución y estados manuales, crea un
+  respaldo automático antes de aplicar y muestra un resumen de los cambios.
+- **Facturación manual con registro**: en cada línea puedes registrar que el
+  proveedor facturó (monto + nota); actualiza facturado/saldo/estado y queda en
+  la **bitácora de actividad** de la línea junto a los eventos de cada carga
+  semanal (avances, cierres, creación).
+
 - **Carga de sábana (.xlsx / .xls / .csv)**: detecta automáticamente la hoja con
   datos (ignora tablas dinámicas), limpia encabezados, auto-mapea las columnas y
   **descarta sola las columnas que no se usan**. Reconoce formatos chilenos de
