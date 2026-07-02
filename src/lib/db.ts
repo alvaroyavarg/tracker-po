@@ -84,6 +84,14 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_ev_po ON line_events("poId");
 
+  -- Registro de IOs: cuáles son de mi gestión (entran al forecast) y su área.
+  CREATE TABLE IF NOT EXISTS io_registry (
+    io          TEXT PRIMARY KEY,
+    managed     BOOLEAN NOT NULL DEFAULT TRUE,
+    area        TEXT,
+    "updatedAt" TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS snapshots (
     id            TEXT PRIMARY KEY,
     label         TEXT NOT NULL,

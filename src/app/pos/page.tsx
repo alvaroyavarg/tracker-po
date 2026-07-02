@@ -18,9 +18,26 @@ export default function PosPage() {
   );
 }
 
+export interface IoMeta {
+  managed: boolean;
+  area: string | null;
+}
+
 function PosPageInner() {
   const searchParams = useSearchParams();
   const fy = searchParams.get("fy")?.toUpperCase() || "";
+  const [ioMeta, setIoMeta] = useState<Record<string, IoMeta>>({});
+
+  useEffect(() => {
+    fetch("/api/ios")
+      .then((r) => r.json())
+      .then((d) => {
+        const map: Record<string, IoMeta> = {};
+        for (const x of d.data || []) map[x.io] = { managed: x.managed, area: x.area };
+        setIoMeta(map);
+      })
+      .catch(() => {});
+  }, []);
   const [rows, setRows] = useState<PoLineDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
@@ -170,6 +187,7 @@ function PosPageInner() {
                     expanded={expanded.has(g.poNumber)}
                     onToggle={() => toggle(g.poNumber)}
                     onEditLine={openEdit}
+                    ioMeta={ioMeta}
                   />
                 ))}
               </tbody>
@@ -193,12 +211,21 @@ function GroupRows({
   expanded,
   onToggle,
   onEditLine,
+  ioMeta,
 }: {
   group: PoGroup;
   expanded: boolean;
   onToggle: () => void;
   onEditLine: (l: PoLineDTO) => void;
+  ioMeta: Record<string, IoMeta>;
 }) {
+  // IO de otra área -> atenuado y con etiqueta.
+  const ioLabel = (io: string | null) => {
+    if (!io) return { cls: "text-ink-muted", area: null };
+    const meta = ioMeta[io];
+    if (meta && !meta.managed) return { cls: "text-zinc-400", area: meta.area || "otra área" };
+    return { cls: "text-accent", area: null };
+  };
   const currency = g.lines[0]?.currency || "CLP";
   const pct = g.lineSum > 0 ? Math.min(100, (g.invoicedSum / g.lineSum) * 100) : 0;
   const multiIO = g.ios.length > 1;
@@ -263,7 +290,12 @@ function GroupRows({
               <div className="flex flex-wrap gap-2 my-3">
                 {ioBreakdown.map((b) => (
                   <div key={b.io} className="rounded-xl border border-zinc-200 bg-white px-3 py-2">
-                    <div className="text-[11px] font-medium text-accent">{b.io}</div>
+                    <div className={`text-[11px] font-medium ${ioLabel(b.io).cls}`}>
+                      {b.io}
+                      {ioLabel(b.io).area && (
+                        <span className="ml-1.5 text-[10px] text-zinc-400">({ioLabel(b.io).area})</span>
+                      )}
+                    </div>
                     <div className="text-xs text-ink-muted mt-0.5">
                       <span className="text-ink font-medium tabular-nums">{formatMoney(b.lineSum, currency)}</span>
                       {" · fact. "}
@@ -300,7 +332,14 @@ function GroupRows({
                       className="border-b border-zinc-50 last:border-0 hover:bg-accent-soft/30 cursor-pointer"
                     >
                       <td className="px-3 py-2 text-ink font-medium">{l.poLine || "—"}</td>
-                      <td className="px-3 py-2 text-accent font-medium whitespace-nowrap">{l.io || "—"}</td>
+                      <td className={`px-3 py-2 font-medium whitespace-nowrap ${ioLabel(l.io).cls}`}>
+                        {l.io || "—"}
+                        {ioLabel(l.io).area && (
+                          <span className="ml-1.5 badge bg-zinc-100 text-zinc-500 ring-zinc-400/20 !text-[10px]">
+                            {ioLabel(l.io).area}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-ink-muted max-w-[150px] truncate" title={l.glDescription || ""}>
                         {l.glDescription || "—"}
                       </td>

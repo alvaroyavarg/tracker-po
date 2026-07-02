@@ -1,18 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listPos } from "@/lib/repo";
+import { listPos, managedIoSet } from "@/lib/repo";
 import { monthKey } from "@/lib/format";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/dashboard?io=&fy=F26
+// GET /api/dashboard?io=&fy=F26&scope=managed|all
 // Métricas agregadas + forecast mensual de ejecución por IO.
+// scope=managed (default): solo IOs de mi gestión; las PO de otras áreas
+// siguen visibles en el tracker, pero no ensucian KPIs ni forecast.
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const ioFilter = sp.get("io")?.trim() || undefined;
   const fy = sp.get("fy")?.trim() || undefined;
+  const scope = sp.get("scope") === "all" ? "all" : "managed";
 
-  const lines = await listPos({ io: ioFilter, fy });
+  let lines = await listPos({ io: ioFilter, fy });
+  if (scope === "managed") {
+    const managed = await managedIoSet();
+    // Las líneas sin IO se consideran propias.
+    lines = lines.filter((l) => !l.io || managed.has(l.io));
+  }
 
   const currencyCount: Record<string, number> = {};
   for (const p of lines) currencyCount[p.currency] = (currencyCount[p.currency] || 0) + 1;

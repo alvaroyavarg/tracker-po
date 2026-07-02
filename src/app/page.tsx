@@ -50,15 +50,17 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [fy, setFy] = useState("F26");
+  const [scope, setScope] = useState<"managed" | "all">("managed");
 
   useEffect(() => {
     setLoading(true);
-    const params = fy ? `?fy=${fy}` : "";
-    fetch(`/api/dashboard${params}`)
+    const params = new URLSearchParams({ scope });
+    if (fy) params.set("fy", fy);
+    fetch(`/api/dashboard?${params.toString()}`)
       .then((r) => r.json())
       .then(setData)
       .finally(() => setLoading(false));
-  }, [fy]);
+  }, [fy, scope]);
 
   const empty = !data || data.totals.lineCount === 0;
   const currency = data?.totals.currency || "CLP";
@@ -71,27 +73,47 @@ export default function DashboardPage() {
     <div className="p-8 max-w-[1200px] mx-auto">
       <PageHeader
         title="Dashboard"
-        subtitle={
+        subtitle={`${
           fy
             ? `Año fiscal ${fy} · creadas ${fy === "F26" ? "01/07/2025 – 30/06/2026" : "01/07/2026 – 30/06/2027"}`
-            : "Todas las Purchase Orders, sin filtro de año fiscal."
-        }
+            : "Todas las Purchase Orders, sin filtro de año fiscal"
+        } · ${scope === "managed" ? "solo IOs de mi gestión" : "incluye IOs de otras áreas"}`}
         actions={
-          <div className="flex items-center gap-1 rounded-xl border border-zinc-200 bg-white p-1">
-            {FY_OPTIONS.map((o) => (
-              <button
-                key={o.value}
-                onClick={() => setFy(o.value)}
-                className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
-                  fy === o.value
-                    ? "bg-accent text-white shadow-soft"
-                    : "text-ink-soft hover:bg-zinc-100"
-                }`}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="flex items-center gap-1 rounded-xl border border-zinc-200 bg-white p-1">
+              {[
+                { value: "managed", label: "Mi gestión" },
+                { value: "all", label: "Todas" },
+              ].map((o) => (
+                <button
+                  key={o.value}
+                  onClick={() => setScope(o.value as "managed" | "all")}
+                  className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                    scope === o.value
+                      ? "bg-emerald-600 text-white shadow-soft"
+                      : "text-ink-soft hover:bg-zinc-100"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1 rounded-xl border border-zinc-200 bg-white p-1">
+              {FY_OPTIONS.map((o) => (
+                <button
+                  key={o.value}
+                  onClick={() => setFy(o.value)}
+                  className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                    fy === o.value
+                      ? "bg-accent text-white shadow-soft"
+                      : "text-ink-soft hover:bg-zinc-100"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </>
         }
       />
 

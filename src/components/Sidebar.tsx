@@ -10,6 +10,7 @@ import {
   Upload,
   History,
   Boxes,
+  Tags,
 } from "lucide-react";
 
 const NAV = [
@@ -17,6 +18,7 @@ const NAV = [
   { href: "/pos?fy=F26", label: "Purchase Orders F26", icon: Table2 },
   { href: "/pos?fy=F27", label: "Purchase Orders F27", icon: Table2 },
   { href: "/import", label: "Cargar sábana", icon: Upload },
+  { href: "/ios", label: "IOs y áreas", icon: Tags },
   { href: "/snapshots", label: "Respaldos", icon: History },
 ];
 

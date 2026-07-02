@@ -441,6 +441,81 @@ export async function reconcileImport(records: PoInput[], closeAbsent: boolean):
   });
 }
 
+// --- Registro de IOs (gestión y áreas) ---
+
+export interface IoInfo {
+  io: string;
+  managed: boolean;
+  area: string | null;
+  lineCount: number;
+  committed: number;
+  open: number;
+}
+
+// Heurística inicial: los IO con "TS" tras el prefijo (MCH26TSOTAA2) son de
+// Trade/otra área y parten como no gestionados. El resto parte como propio.
+function defaultClassification(io: string): { managed: boolean; area: string | null } {
+  if (/^.{5}TS/i.test(io)) return { managed: false, area: "TS" };
+  return { managed: true, area: null };
+}
+
+// Asegura que todo IO presente en po_lines exista en el registro.
+export async function syncIoRegistry(): Promise<void> {
+  const rows = await q(
+    `SELECT DISTINCT io FROM po_lines WHERE io IS NOT NULL
+     AND io NOT IN (SELECT io FROM io_registry)`
+  );
+  for (const r of rows) {
+    const def = defaultClassification(r.io);
+    await q(
+      'INSERT INTO io_registry (io, managed, area, "updatedAt") VALUES ($1, $2, $3, $4) ON CONFLICT (io) DO NOTHING',
+      [r.io, def.managed, def.area, nowIso()]
+    );
+  }
+}
+
+export async function listIos(): Promise<IoInfo[]> {
+  await syncIoRegistry();
+  const rows = await q(`
+    SELECT r.io, r.managed, r.area,
+           COUNT(l.id)::int AS "lineCount",
+           COALESCE(SUM(l."lineValue"), 0)::float AS committed,
+           COALESCE(SUM(l."openAmount"), 0)::float AS open
+    FROM io_registry r
+    LEFT JOIN po_lines l ON l.io = r.io
+    GROUP BY r.io, r.managed, r.area
+    ORDER BY r.managed DESC, committed DESC
+  `);
+  return rows as IoInfo[];
+}
+
+export async function upsertIo(io: string, patch: { managed?: boolean; area?: string | null }) {
+  const def = defaultClassification(io);
+  await q(
+    `INSERT INTO io_registry (io, managed, area, "updatedAt") VALUES ($1, $2, $3, $4)
+     ON CONFLICT (io) DO UPDATE SET
+       managed = COALESCE($5, io_registry.managed),
+       area = CASE WHEN $6 THEN $7 ELSE io_registry.area END,
+       "updatedAt" = $4`,
+    [
+      io,
+      patch.managed ?? def.managed,
+      patch.area !== undefined ? patch.area : def.area,
+      nowIso(),
+      patch.managed ?? null,
+      patch.area !== undefined,
+      patch.area ?? null,
+    ]
+  );
+}
+
+// Set de IOs de mi gestión (para filtrar dashboard/forecast).
+export async function managedIoSet(): Promise<Set<string>> {
+  await syncIoRegistry();
+  const rows = await q("SELECT io FROM io_registry WHERE managed = TRUE");
+  return new Set(rows.map((r) => r.io));
+}
+
 // --- Snapshots ---
 
 export interface SnapshotMeta {
