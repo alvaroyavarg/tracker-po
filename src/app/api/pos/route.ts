@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 // GET /api/pos?q=&status=&io=&vendor=&poNumber=
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const data = listPos({
+  const data = await listPos({
     q: sp.get("q")?.trim() || undefined,
     status: sp.get("status")?.trim() || undefined,
     io: sp.get("io")?.trim() || undefined,
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   }
   const lineValue = coerceNumber(body.lineValue);
   const invoiced = coerceNumber(body.invoicedAmount);
-  const po = createPo({
+  const po = await createPo({
     poNumber: String(body.poNumber).trim(),
     poLine: coerceText(body.poLine),
     io: coerceText(body.io),

@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const format = sp.get("format") === "csv" ? "csv" : "xlsx";
 
-  const pos = listPos({
+  const pos = await listPos({
     q: sp.get("q")?.trim() || undefined,
     status: sp.get("status")?.trim() || undefined,
     io: sp.get("io")?.trim() || undefined,

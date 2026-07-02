@@ -21,6 +21,8 @@ const NAV = [
 export function Sidebar() {
   const pathname = usePathname();
 
+  if (pathname === "/login") return null;
+
   return (
     <aside className="w-64 shrink-0 border-r border-zinc-200/70 bg-white/60 backdrop-blur-sm px-4 py-6 flex flex-col gap-8 sticky top-0 h-screen">
       <div className="flex items-center gap-2.5 px-2">

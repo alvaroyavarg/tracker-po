@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const ioFilter = sp.get("io")?.trim() || undefined;
 
-  const lines = listPos({ io: ioFilter });
+  const lines = await listPos({ io: ioFilter });
 
   const currencyCount: Record<string, number> = {};
   for (const p of lines) currencyCount[p.currency] = (currencyCount[p.currency] || 0) + 1;

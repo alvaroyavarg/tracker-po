@@ -13,7 +13,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!amount) {
     return NextResponse.json({ error: "Indica un monto distinto de 0" }, { status: 400 });
   }
-  const po = registerInvoice(params.id, amount, coerceText(body.note));
+  const po = await registerInvoice(params.id, amount, coerceText(body.note));
   if (!po) return NextResponse.json({ error: "No encontrada" }, { status: 404 });
   return NextResponse.json({ data: po });
 }

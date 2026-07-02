@@ -1,4 +1,5 @@
-import { getDb, newId, nowIso } from "./db";
+import { PoolClient } from "pg";
+import { q, withTransaction, newId, nowIso } from "./db";
 import type { PoLineDTO } from "./types";
 
 export interface PoInput {
@@ -32,9 +33,20 @@ const ISO = (d: Date | string | null | undefined): string | null => {
   return String(d);
 };
 
-const COLS =
-  "id, poNumber, poLine, io, vendor, description, glAccount, glDescription, requisitioner, owner, reportingFY, totalPoValue, lineValue, invoicedAmount, openAmount, currency, status, poDate, deliveryDate, executionDate, notes, raw, createdAt, updatedAt";
-const PLACEHOLDERS = COLS.split(",").map(() => "?").join(", ");
+// Ejecutor de queries: el pool por defecto, o un cliente dentro de una transacción.
+type Runner = (text: string, params?: any[]) => Promise<any[]>;
+const poolRunner: Runner = (text, params) => q(text, params || []);
+const clientRunner = (c: PoolClient): Runner => async (text, params) =>
+  (await c.query(text, params || [])).rows;
+
+const COLS = [
+  "id", "poNumber", "poLine", "io", "vendor", "description", "glAccount",
+  "glDescription", "requisitioner", "owner", "reportingFY", "totalPoValue",
+  "lineValue", "invoicedAmount", "openAmount", "currency", "status", "poDate",
+  "deliveryDate", "executionDate", "notes", "raw", "lastSeenAt", "createdAt", "updatedAt",
+];
+const COL_LIST = COLS.map((c) => `"${c}"`).join(", ");
+const PLACEHOLDERS = COLS.map((_, i) => `$${i + 1}`).join(", ");
 
 function insertArgs(id: string, input: PoInput, now: string): any[] {
   return [
@@ -60,6 +72,7 @@ function insertArgs(id: string, input: PoInput, now: string): any[] {
     ISO(input.executionDate),
     N(input.notes),
     N(input.raw),
+    null, // lastSeenAt
     now,
     now,
   ];
@@ -73,86 +86,89 @@ export interface PoFilters {
   poNumber?: string;
 }
 
-export function listPos(f: PoFilters = {}): PoLineDTO[] {
-  const db = getDb();
+export async function listPos(f: PoFilters = {}, run: Runner = poolRunner): Promise<PoLineDTO[]> {
   const clauses: string[] = [];
   const args: any[] = [];
-  if (f.status) { clauses.push("status = ?"); args.push(f.status); }
-  if (f.io) { clauses.push("io = ?"); args.push(f.io); }
-  if (f.vendor) { clauses.push("vendor = ?"); args.push(f.vendor); }
-  if (f.poNumber) { clauses.push("poNumber = ?"); args.push(f.poNumber); }
+  const p = () => `$${args.length}`;
+  if (f.status) { args.push(f.status); clauses.push(`status = ${p()}`); }
+  if (f.io) { args.push(f.io); clauses.push(`io = ${p()}`); }
+  if (f.vendor) { args.push(f.vendor); clauses.push(`vendor = ${p()}`); }
+  if (f.poNumber) { args.push(f.poNumber); clauses.push(`"poNumber" = ${p()}`); }
   if (f.q) {
-    clauses.push("(poNumber LIKE ? OR vendor LIKE ? OR description LIKE ? OR io LIKE ? OR glDescription LIKE ?)");
-    const like = `%${f.q}%`;
-    args.push(like, like, like, like, like);
+    args.push(`%${f.q}%`);
+    const like = p();
+    clauses.push(
+      `("poNumber" ILIKE ${like} OR vendor ILIKE ${like} OR description ILIKE ${like} OR io ILIKE ${like} OR "glDescription" ILIKE ${like})`
+    );
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = db
-    .prepare(`SELECT * FROM po_lines ${where} ORDER BY poNumber, poLine, io`)
-    .all(...args) as any[];
+  const rows = await run(
+    `SELECT * FROM po_lines ${where} ORDER BY "poNumber", "poLine", io`,
+    args
+  );
   return rows.map(toDTO);
 }
 
-export function getPo(id: string): PoLineDTO | null {
-  const row = getDb().prepare("SELECT * FROM po_lines WHERE id = ?").get(id) as any;
-  return row ? toDTO(row) : null;
+export async function getPo(id: string, run: Runner = poolRunner): Promise<PoLineDTO | null> {
+  const rows = await run("SELECT * FROM po_lines WHERE id = $1", [id]);
+  return rows[0] ? toDTO(rows[0]) : null;
 }
 
-export function getHistory(poId: string) {
-  return getDb()
-    .prepare("SELECT * FROM status_changes WHERE poId = ? ORDER BY createdAt DESC")
-    .all(poId) as any[];
+export async function getHistory(poId: string) {
+  return q('SELECT * FROM status_changes WHERE "poId" = $1 ORDER BY "createdAt" DESC', [poId]);
 }
 
-export function createPo(input: PoInput): PoLineDTO {
-  const db = getDb();
+export async function createPo(input: PoInput, run: Runner = poolRunner): Promise<PoLineDTO> {
   const id = newId();
-  db.prepare(`INSERT INTO po_lines (${COLS}) VALUES (${PLACEHOLDERS})`).run(
-    ...insertArgs(id, input, nowIso())
+  await run(
+    `INSERT INTO po_lines (${COL_LIST}) VALUES (${PLACEHOLDERS})`,
+    insertArgs(id, input, nowIso())
   );
-  return getPo(id)!;
+  return (await getPo(id, run))!;
 }
 
-export function updatePo(id: string, patch: Partial<PoInput>): PoLineDTO | null {
-  const db = getDb();
-  const existing = db.prepare("SELECT * FROM po_lines WHERE id = ?").get(id) as any;
+const PATCHABLE: Record<string, "text" | "num" | "date"> = {
+  poNumber: "text", poLine: "text", io: "text", vendor: "text", description: "text",
+  glAccount: "text", glDescription: "text", requisitioner: "text", owner: "text",
+  reportingFY: "text", notes: "text", raw: "text", currency: "text", status: "text",
+  totalPoValue: "num", lineValue: "num", invoicedAmount: "num", openAmount: "num",
+  poDate: "date", deliveryDate: "date", executionDate: "date",
+};
+
+export async function updatePo(
+  id: string,
+  patch: Partial<PoInput>,
+  run: Runner = poolRunner
+): Promise<PoLineDTO | null> {
+  const existing = await getPo(id, run);
   if (!existing) return null;
 
   const fields: string[] = [];
   const args: any[] = [];
-  const setField = (col: string, val: any) => { fields.push(`${col} = ?`); args.push(val); };
-
-  if (patch.poNumber !== undefined) setField("poNumber", patch.poNumber);
-  if (patch.poLine !== undefined) setField("poLine", N(patch.poLine));
-  if (patch.io !== undefined) setField("io", N(patch.io));
-  if (patch.vendor !== undefined) setField("vendor", N(patch.vendor));
-  if (patch.description !== undefined) setField("description", N(patch.description));
-  if (patch.glAccount !== undefined) setField("glAccount", N(patch.glAccount));
-  if (patch.glDescription !== undefined) setField("glDescription", N(patch.glDescription));
-  if (patch.requisitioner !== undefined) setField("requisitioner", N(patch.requisitioner));
-  if (patch.owner !== undefined) setField("owner", N(patch.owner));
-  if (patch.reportingFY !== undefined) setField("reportingFY", N(patch.reportingFY));
-  if (patch.totalPoValue !== undefined) setField("totalPoValue", patch.totalPoValue ?? 0);
-  if (patch.lineValue !== undefined) setField("lineValue", patch.lineValue ?? 0);
-  if (patch.invoicedAmount !== undefined) setField("invoicedAmount", patch.invoicedAmount ?? 0);
-  if (patch.openAmount !== undefined) setField("openAmount", patch.openAmount ?? 0);
-  if (patch.currency !== undefined) setField("currency", N(patch.currency) ?? "CLP");
-  if (patch.status !== undefined) setField("status", N(patch.status) ?? existing.status);
-  if (patch.poDate !== undefined) setField("poDate", ISO(patch.poDate));
-  if (patch.deliveryDate !== undefined) setField("deliveryDate", ISO(patch.deliveryDate));
-  if (patch.executionDate !== undefined) setField("executionDate", ISO(patch.executionDate));
-  if (patch.notes !== undefined) setField("notes", N(patch.notes));
-
-  setField("updatedAt", nowIso());
+  for (const [key, kind] of Object.entries(PATCHABLE)) {
+    const val = (patch as any)[key];
+    if (val === undefined) continue;
+    args.push(kind === "num" ? val ?? 0 : kind === "date" ? ISO(val) : N(val));
+    fields.push(`"${key}" = $${args.length}`);
+  }
+  args.push(nowIso());
+  fields.push(`"updatedAt" = $${args.length}`);
   args.push(id);
-  db.prepare(`UPDATE po_lines SET ${fields.join(", ")} WHERE id = ?`).run(...args);
-  return getPo(id);
+  await run(`UPDATE po_lines SET ${fields.join(", ")} WHERE id = $${args.length}`, args);
+  return getPo(id, run);
 }
 
-export function addStatusChange(poId: string, fromStatus: string | null, toStatus: string, note?: string | null) {
-  getDb()
-    .prepare("INSERT INTO status_changes (id, poId, fromStatus, toStatus, note, createdAt) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(newId(), poId, N(fromStatus), toStatus, N(note), nowIso());
+export async function addStatusChange(
+  poId: string,
+  fromStatus: string | null,
+  toStatus: string,
+  note?: string | null,
+  run: Runner = poolRunner
+) {
+  await run(
+    'INSERT INTO status_changes (id, "poId", "fromStatus", "toStatus", note, "createdAt") VALUES ($1, $2, $3, $4, $5, $6)',
+    [newId(), poId, N(fromStatus), toStatus, N(note), nowIso()]
+  );
 }
 
 // --- Bitácora de actividad por línea ---
@@ -164,16 +180,15 @@ export type LineEventType =
   | "created"
   | "amounts_updated";
 
-export function addEvent(
+export async function addEvent(
   poId: string,
   type: LineEventType,
-  opts: { amount?: number | null; prevValue?: number | null; newValue?: number | null; note?: string | null; source?: "manual" | "import" } = {}
+  opts: { amount?: number | null; prevValue?: number | null; newValue?: number | null; note?: string | null; source?: "manual" | "import" } = {},
+  run: Runner = poolRunner
 ) {
-  getDb()
-    .prepare(
-      "INSERT INTO line_events (id, poId, type, amount, prevValue, newValue, note, source, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(
+  await run(
+    'INSERT INTO line_events (id, "poId", type, amount, "prevValue", "newValue", note, source, "createdAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+    [
       newId(),
       poId,
       type,
@@ -182,14 +197,13 @@ export function addEvent(
       opts.newValue ?? null,
       N(opts.note),
       opts.source ?? "manual",
-      nowIso()
-    );
+      nowIso(),
+    ]
+  );
 }
 
-export function getEvents(poId: string) {
-  return getDb()
-    .prepare("SELECT * FROM line_events WHERE poId = ? ORDER BY createdAt DESC")
-    .all(poId) as any[];
+export async function getEvents(poId: string) {
+  return q('SELECT * FROM line_events WHERE "poId" = $1 ORDER BY "createdAt" DESC', [poId]);
 }
 
 // Estados que la app puede pisar automáticamente; los demás son decisión manual.
@@ -202,12 +216,12 @@ function deriveStatus(lineValue: number, invoiced: number, open: number): string
 }
 
 // Registra una facturación manual (incremental): actualiza montos, estado y bitácora.
-export function registerInvoice(
+export async function registerInvoice(
   id: string,
   amount: number,
   note?: string | null
-): PoLineDTO | null {
-  const po = getPo(id);
+): Promise<PoLineDTO | null> {
+  const po = await getPo(id);
   if (!po) return null;
   const prevInvoiced = po.invoicedAmount || 0;
   const newInvoiced = Math.max(0, prevInvoiced + amount);
@@ -218,11 +232,11 @@ export function registerInvoice(
     const st = deriveStatus(po.lineValue || 0, newInvoiced, newOpen);
     if (st !== po.status) {
       patch.status = st;
-      addStatusChange(id, po.status, st, "Ajuste por facturación manual");
+      await addStatusChange(id, po.status, st, "Ajuste por facturación manual");
     }
   }
-  const updated = updatePo(id, patch);
-  addEvent(id, "manual_invoice", {
+  const updated = await updatePo(id, patch);
+  await addEvent(id, "manual_invoice", {
     amount,
     prevValue: prevInvoiced,
     newValue: newInvoiced,
@@ -232,6 +246,28 @@ export function registerInvoice(
   return updated;
 }
 
+export async function deletePo(id: string) {
+  await q('DELETE FROM status_changes WHERE "poId" = $1', [id]);
+  await q('DELETE FROM line_events WHERE "poId" = $1', [id]);
+  await q("DELETE FROM po_lines WHERE id = $1", [id]);
+}
+
+export async function clearAllPos() {
+  await q("DELETE FROM status_changes");
+  await q("DELETE FROM line_events");
+  await q("DELETE FROM po_lines");
+}
+
+export async function bulkCreate(inputs: PoInput[]): Promise<number> {
+  return withTransaction(async (c) => {
+    const now = nowIso();
+    for (const input of inputs) {
+      await c.query(`INSERT INTO po_lines (${COL_LIST}) VALUES (${PLACEHOLDERS})`, insertArgs(newId(), input, now));
+    }
+    return inputs.length;
+  });
+}
+
 // --- Reconciliación semanal ---
 
 const lineKey = (poNumber: string, poLine: string | null, io: string | null) =>
@@ -239,11 +275,11 @@ const lineKey = (poNumber: string, poLine: string | null, io: string | null) =>
 
 export interface ReconcileSummary {
   created: number;
-  progressed: number; // facturación avanzó
-  updated: number; // otros montos/datos cambiaron
-  closed: number; // no vinieron en la sábana -> facturadas completas y cerradas
+  progressed: number;
+  updated: number;
+  closed: number;
   unchanged: number;
-  invoicedDelta: number; // total facturado detectado en esta carga
+  invoicedDelta: number;
 }
 
 // Aplica la sábana semanal contra lo existente:
@@ -251,53 +287,46 @@ export interface ReconcileSummary {
 //   ejecución/estados manuales, y registra el avance de facturación.
 // - línea nueva: se crea.
 // - línea existente que no viene: se asume facturada completa -> Cerrada.
-export function reconcileImport(records: PoInput[], closeAbsent: boolean): ReconcileSummary {
-  const db = getDb();
-  const now = nowIso();
-  const summary: ReconcileSummary = {
-    created: 0,
-    progressed: 0,
-    updated: 0,
-    closed: 0,
-    unchanged: 0,
-    invoicedDelta: 0,
-  };
+export async function reconcileImport(records: PoInput[], closeAbsent: boolean): Promise<ReconcileSummary> {
+  return withTransaction(async (c) => {
+    const run = clientRunner(c);
+    const now = nowIso();
+    const summary: ReconcileSummary = {
+      created: 0, progressed: 0, updated: 0, closed: 0, unchanged: 0, invoicedDelta: 0,
+    };
 
-  // La misma llave PO+línea+IO puede venir repetida legítimamente en la sábana,
-  // así que se empareja ocurrencia contra ocurrencia (eligiendo la candidata con
-  // el valor de línea más parecido).
-  const existing = listPos();
-  const byKey = new Map<string, PoLineDTO[]>();
-  for (const l of existing) {
-    const k = lineKey(l.poNumber, l.poLine, l.io);
-    const arr = byKey.get(k) || [];
-    arr.push(l);
-    byKey.set(k, arr);
-  }
-  const matchedIds = new Set<string>();
+    // La misma llave PO+línea+IO puede venir repetida legítimamente en la sábana,
+    // así que se empareja ocurrencia contra ocurrencia (eligiendo la candidata con
+    // el valor de línea más parecido).
+    const existing = await listPos({}, run);
+    const byKey = new Map<string, PoLineDTO[]>();
+    for (const l of existing) {
+      const k = lineKey(l.poNumber, l.poLine, l.io);
+      const arr = byKey.get(k) || [];
+      arr.push(l);
+      byKey.set(k, arr);
+    }
+    const matchedIds = new Set<string>();
 
-  db.exec("BEGIN");
-  try {
     for (const r of records) {
       const key = lineKey(r.poNumber, (r.poLine as string) ?? null, (r.io as string) ?? null);
-      const candidates = (byKey.get(key) || []).filter((c) => !matchedIds.has(c.id));
+      const candidates = (byKey.get(key) || []).filter((x) => !matchedIds.has(x.id));
 
       if (candidates.length === 0) {
-        // Línea nueva
-        const created = createPo({ ...r });
-        db.prepare("UPDATE po_lines SET lastSeenAt = ? WHERE id = ?").run(now, created.id);
-        addEvent(created.id, "created", {
+        const created = await createPo({ ...r }, run);
+        await run('UPDATE po_lines SET "lastSeenAt" = $1 WHERE id = $2', [now, created.id]);
+        await addEvent(created.id, "created", {
           newValue: r.invoicedAmount ?? 0,
           note: "Línea nueva en la sábana",
           source: "import",
-        });
+        }, run);
         summary.created++;
         continue;
       }
 
       const targetValue = r.lineValue ?? 0;
-      const prev = candidates.reduce((best, c) =>
-        Math.abs((c.lineValue || 0) - targetValue) < Math.abs((best.lineValue || 0) - targetValue) ? c : best
+      const prev = candidates.reduce((best, x) =>
+        Math.abs((x.lineValue || 0) - targetValue) < Math.abs((best.lineValue || 0) - targetValue) ? x : best
       );
       matchedIds.add(prev.id);
 
@@ -338,29 +367,29 @@ export function reconcileImport(records: PoInput[], closeAbsent: boolean): Recon
         );
         if (st !== prev.status) {
           patch.status = st;
-          addStatusChange(prev.id, prev.status, st, "Actualización semanal");
+          await addStatusChange(prev.id, prev.status, st, "Actualización semanal", run);
         }
       }
-      updatePo(prev.id, patch);
-      db.prepare("UPDATE po_lines SET lastSeenAt = ? WHERE id = ?").run(now, prev.id);
+      await updatePo(prev.id, patch, run);
+      await run('UPDATE po_lines SET "lastSeenAt" = $1 WHERE id = $2', [now, prev.id]);
 
       if (delta > 0.005) {
-        addEvent(prev.id, "invoice_progress", {
+        await addEvent(prev.id, "invoice_progress", {
           amount: delta,
           prevValue: prevInvoiced,
           newValue: newInvoiced,
           note: "Avance de facturación detectado en la sábana",
           source: "import",
-        });
+        }, run);
         summary.progressed++;
         summary.invoicedDelta += delta;
       } else if (amountsChanged) {
-        addEvent(prev.id, "amounts_updated", {
+        await addEvent(prev.id, "amounts_updated", {
           prevValue: prev.lineValue,
           newValue: (patch.lineValue as number) ?? prev.lineValue,
           note: "Montos actualizados desde la sábana",
           source: "import",
-        });
+        }, run);
         summary.updated++;
       } else {
         summary.unchanged++;
@@ -374,61 +403,26 @@ export function reconcileImport(records: PoInput[], closeAbsent: boolean): Recon
         if (prev.status === "Cerrada" || prev.status === "Anulada") continue;
         const prevInvoiced = prev.invoicedAmount || 0;
         const finalInvoiced = prev.lineValue || prevInvoiced;
-        updatePo(prev.id, {
+        await updatePo(prev.id, {
           invoicedAmount: finalInvoiced,
           openAmount: 0,
           status: "Cerrada",
-        });
-        addStatusChange(prev.id, prev.status, "Cerrada", "No vino en la sábana semanal");
-        addEvent(prev.id, "closed_absent", {
+        }, run);
+        await addStatusChange(prev.id, prev.status, "Cerrada", "No vino en la sábana semanal", run);
+        await addEvent(prev.id, "closed_absent", {
           amount: Math.max(0, finalInvoiced - prevInvoiced),
           prevValue: prevInvoiced,
           newValue: finalInvoiced,
           note: "Facturada completa: la línea ya no aparece en la sábana",
           source: "import",
-        });
+        }, run);
         summary.closed++;
         summary.invoicedDelta += Math.max(0, finalInvoiced - prevInvoiced);
       }
     }
 
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
-  return summary;
-}
-
-export function deletePo(id: string) {
-  const db = getDb();
-  db.prepare("DELETE FROM status_changes WHERE poId = ?").run(id);
-  db.prepare("DELETE FROM po_lines WHERE id = ?").run(id);
-}
-
-export function clearAllPos() {
-  const db = getDb();
-  db.prepare("DELETE FROM status_changes").run();
-  db.prepare("DELETE FROM po_lines").run();
-}
-
-export function bulkCreate(inputs: PoInput[]): number {
-  const db = getDb();
-  const now = nowIso();
-  const stmt = db.prepare(`INSERT INTO po_lines (${COLS}) VALUES (${PLACEHOLDERS})`);
-  db.exec("BEGIN");
-  let count = 0;
-  try {
-    for (const input of inputs) {
-      stmt.run(...insertArgs(newId(), input, now));
-      count++;
-    }
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
-  return count;
+    return summary;
+  });
 }
 
 // --- Snapshots ---
@@ -442,40 +436,40 @@ export interface SnapshotMeta {
   createdAt: string;
 }
 
-export function listSnapshots(): SnapshotMeta[] {
-  return getDb()
-    .prepare("SELECT id, label, note, count, totalAmount, createdAt FROM snapshots ORDER BY createdAt DESC")
-    .all() as any[];
+export async function listSnapshots(): Promise<SnapshotMeta[]> {
+  return q(
+    'SELECT id, label, note, count, "totalAmount", "createdAt" FROM snapshots ORDER BY "createdAt" DESC'
+  ) as Promise<SnapshotMeta[]>;
 }
 
-export function createSnapshot(label: string, note: string | null): SnapshotMeta {
-  const db = getDb();
-  const pos = listPos();
+export async function createSnapshot(label: string, note: string | null): Promise<SnapshotMeta> {
+  const pos = await listPos();
   const totalAmount = pos.reduce((s, p) => s + (p.lineValue || 0), 0);
   const id = newId();
   const createdAt = nowIso();
-  db.prepare(
-    "INSERT INTO snapshots (id, label, note, data, count, totalAmount, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).run(id, label, N(note), JSON.stringify(pos), pos.length, totalAmount, createdAt);
+  await q(
+    'INSERT INTO snapshots (id, label, note, data, count, "totalAmount", "createdAt") VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [id, label, N(note), JSON.stringify(pos), pos.length, totalAmount, createdAt]
+  );
   return { id, label, note, count: pos.length, totalAmount, createdAt };
 }
 
-export function getSnapshot(id: string): any | null {
-  const row = getDb().prepare("SELECT * FROM snapshots WHERE id = ?").get(id) as any;
-  if (!row) return null;
-  return { ...row, data: JSON.parse(row.data) };
+export async function getSnapshot(id: string): Promise<any | null> {
+  const rows = await q("SELECT * FROM snapshots WHERE id = $1", [id]);
+  if (!rows[0]) return null;
+  return { ...rows[0], data: JSON.parse(rows[0].data) };
 }
 
-export function deleteSnapshot(id: string) {
-  getDb().prepare("DELETE FROM snapshots WHERE id = ?").run(id);
+export async function deleteSnapshot(id: string) {
+  await q("DELETE FROM snapshots WHERE id = $1", [id]);
 }
 
-export function restoreSnapshot(id: string): number {
-  const snap = getSnapshot(id);
+export async function restoreSnapshot(id: string): Promise<number> {
+  const snap = await getSnapshot(id);
   if (!snap) return -1;
   const rows = snap.data as PoLineDTO[];
-  clearAllPos();
-  const inputs: PoInput[] = rows.map((r) => ({ ...r }));
+  await clearAllPos();
+  const inputs: PoInput[] = rows.map((r) => ({ ...r, raw: undefined }));
   return bulkCreate(inputs);
 }
 

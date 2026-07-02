@@ -6,14 +6,14 @@ export const dynamic = "force-dynamic";
 
 // GET /api/snapshots -> lista de respaldos (sin el blob de datos)
 export async function GET() {
-  return NextResponse.json({ data: listSnapshots() });
+  return NextResponse.json({ data: await listSnapshots() });
 }
 
 // POST /api/snapshots -> crea un respaldo del estado actual de todas las PO
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const label = (body.label && String(body.label).trim()) || defaultLabel();
-  const snap = createSnapshot(label, body.note ? String(body.note).trim() : null);
+  const snap = await createSnapshot(label, body.note ? String(body.note).trim() : null);
   return NextResponse.json({ data: snap }, { status: 201 });
 }
 

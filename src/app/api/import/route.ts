@@ -99,15 +99,15 @@ export async function POST(req: NextRequest) {
 
   if (mode === "update") {
     // Respaldo automático antes de reconciliar, por si hay que volver atrás.
-    if (listPos().length > 0) {
+    if ((await listPos()).length > 0) {
       const stamp = new Date().toLocaleDateString("es-CL");
-      createSnapshot(`Auto — antes de carga semanal ${stamp}`, null);
+      await createSnapshot(`Auto — antes de carga semanal ${stamp}`, null);
     }
-    const summary = reconcileImport(records, closeAbsent);
+    const summary = await reconcileImport(records, closeAbsent);
     return NextResponse.json({ mode, skipped, filteredOut, summary });
   }
 
-  if (mode === "replace") clearAllPos();
-  const imported = bulkCreate(records);
+  if (mode === "replace") await clearAllPos();
+  const imported = await bulkCreate(records);
   return NextResponse.json({ imported, skipped, filteredOut, mode });
 }
